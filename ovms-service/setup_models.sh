@@ -92,7 +92,7 @@ setup_python_env() {
     if [ ! -f "${SCRIPT_DIR}/export_model.py" ]; then
         echo "[1/3] Downloading OVMS export tools..."
 
-        EXPORT_BASE_URL="https://raw.githubusercontent.com/openvinotoolkit/model_server/refs/heads/releases/2025/4/demos/common/export_models"
+        EXPORT_BASE_URL="https://raw.githubusercontent.com/openvinotoolkit/model_server/refs/heads/releases/2026/0/demos/common/export_models"
 
         curl -fsSL "${EXPORT_BASE_URL}/export_model.py" -o "${SCRIPT_DIR}/export_model.py"
         curl -fsSL "${EXPORT_BASE_URL}/requirements.txt" -o "${SCRIPT_DIR}/export_requirements.txt"
@@ -136,8 +136,9 @@ export_model() {
       --pipeline_type VLM_CB \
       --target_device GPU \
       --cache_size 32 \
-      --max_num_seqs 1 \
-      --enable_prefix_caching \
+      --max_num_seqs 4 \
+      --max_num_batched_tokens 8192 \
+      --enable_prefix_caching True \
       --config_file_path "${MODELS_DIR}/config.json" \
       --model_repository_path "${MODELS_DIR}/Qwen" \
       --model_name "${MODEL_NAME}"
@@ -227,129 +228,6 @@ for MODEL_NAME in "${!MODEL_SOURCES[@]}"; do
 done
 
 ###############################################
-# APPLY graph_options.json TO graph.pbtxt
-###############################################
-# This allows testers to tune OVMS parameters by editing
-# graph_options.json instead of manually editing graph.pbtxt.
-###############################################
-
-apply_graph_config() {
-    local GRAPH_OPTIONS_FILE="${MODELS_DIR}/graph_options.json"
-    local MODEL_NAME="$1"
-    local GRAPH_FILE="${MODELS_DIR}/Qwen/${MODEL_NAME}/graph.pbtxt"
-
-    if [ ! -f "${GRAPH_OPTIONS_FILE}" ]; then
-        echo "  No graph_options.json found, keeping existing graph.pbtxt"
-        return 0
-    fi
-
-    echo ""
-    echo "------------------------------------------"
-    echo "Applying graph_options.json to graph.pbtxt"
-    echo "------------------------------------------"
-
-    python3 - "${GRAPH_OPTIONS_FILE}" "${GRAPH_FILE}" << 'PYEOF'
-import json, sys
-
-graph_options_file = sys.argv[1]
-graph_file = sys.argv[2]
-
-opts = json.load(open(graph_options_file))
-
-# Build plugin_config string with escaped quotes for protobuf
-plugin_cfg = opts.get('plugin_config', {})
-plugin_str = json.dumps(plugin_cfg).replace('"', '\\"') if plugin_cfg else '{}'
-
-# Boolean fields (protobuf uses lowercase true/false)
-prefix_caching = 'true' if opts.get('enable_prefix_caching', False) else 'false'
-dynamic_split = 'true' if opts.get('dynamic_split_fuse', False) else 'false'
-
-max_num_seqs = opts.get('max_num_seqs', 4)
-cache_size = opts.get('cache_size', 10)
-max_num_batched_tokens = opts.get('max_num_batched_tokens', 4096)
-device = opts.get('device', 'GPU')
-
-graph = f'''input_stream: "HTTP_REQUEST_PAYLOAD:input"
-output_stream: "HTTP_RESPONSE_PAYLOAD:output"
-
-node {{
-  name: "LLMExecutor"
-  calculator: "HttpLLMCalculator"
-
-  input_stream: "LOOPBACK:loopback"
-  input_stream: "HTTP_REQUEST_PAYLOAD:input"
-
-  input_side_packet: "LLM_NODE_RESOURCES:llm"
-
-  output_stream: "LOOPBACK:loopback"
-  output_stream: "HTTP_RESPONSE_PAYLOAD:output"
-
-  input_stream_info {{
-    tag_index: "LOOPBACK:0"
-    back_edge: true
-  }}
-
-  node_options {{
-    [type.googleapis.com/mediapipe.LLMCalculatorOptions] {{
-
-      pipeline_type: VLM_CB
-      models_path: "./"
-
-      plugin_config: "{plugin_str}"
-
-      enable_prefix_caching: {prefix_caching}
-      cache_size: {cache_size}
-
-      max_num_seqs: {max_num_seqs}
-      dynamic_split_fuse: {dynamic_split}
-      max_num_batched_tokens: {max_num_batched_tokens}
-
-      device: "{device}"
-    }}
-  }}
-  input_stream_handler {{
-    input_stream_handler: "SyncSetInputStreamHandler"
-
-    options {{
-      [mediapipe.SyncSetInputStreamHandlerOptions.ext] {{
-        sync_set {{
-          tag_index: "LOOPBACK:0"
-        }}
-      }}
-    }}
-  }}
-}}
-'''
-
-with open(graph_file, 'w') as f:
-    f.write(graph)
-
-print('  Values applied:')
-print(f'    max_num_seqs:          {max_num_seqs}')
-print(f'    cache_size:            {cache_size}')
-print(f'    enable_prefix_caching: {prefix_caching}')
-print(f'    dynamic_split_fuse:    {dynamic_split}')
-print(f'    max_num_batched_tokens:{max_num_batched_tokens}')
-print(f'    device:                {device}')
-PYEOF
-
-    if [ $? -eq 0 ]; then
-        echo "  ✓ graph.pbtxt updated from graph_options.json"
-    else
-        echo "  ✗ Failed to apply graph_options"
-        return 1
-    fi
-}
-
-# Apply graph_options for each model
-for MODEL_NAME in "${!MODEL_SOURCES[@]}"; do
-    TARGET_PATH="${MODELS_DIR}/Qwen/${MODEL_NAME}"
-    if [ -d "${TARGET_PATH}" ]; then
-        apply_graph_config "${MODEL_NAME}"
-    fi
-done
-
-###############################################
 # GENERATE OVMS config.json (mediapipe_config_list)
 # export_model.py generates a model_config_list config which does NOT support
 # the /v3/chat/completions endpoint. OVMS LLM/VLM serving requires a
@@ -360,7 +238,7 @@ done
 generate_ovms_config() {
     echo ""
     echo "------------------------------------------"
-    echo "Generating OVMS config.json (mediapipe)"
+    echo "Generating OVMS config.json "
     echo "------------------------------------------"
     echo "  OVMS_MODEL_NAME: ${OVMS_MODEL_NAME_ENV}"
 
@@ -415,7 +293,7 @@ echo "=========================================="
 ###############################################
 TAKEAWAY_DIR="$(dirname "${SCRIPT_DIR}")/take-away"
 EASYOCR_DIR="${TAKEAWAY_DIR}/models/easyocr"
-YOLO_MODEL_DIR="${TAKEAWAY_DIR}/model"
+YOLO_MODEL_DIR="${TAKEAWAY_DIR}/models"
 YOLO_DATASETS_DIR="${TAKEAWAY_DIR}/datasets"
 YOLO_PT="${YOLO_MODEL_DIR}/yolo11n.pt"
 YOLO_FP32_DIR="${YOLO_MODEL_DIR}/yolo11n_openvino_model"
@@ -484,10 +362,10 @@ fi
 # YOLO MODEL DOWNLOAD AND QUANTIZATION
 # YOLO11n is used by the frame-selector service for frame quality scoring.
 # Three artifacts are pre-built here so the container starts instantly:
-#   take-away/model/yolo11n.pt                    — base PyTorch weights
-#   take-away/model/yolo11n_openvino_model/        — FP32 OpenVINO IR
-#   take-away/model/yolo11n_int8_openvino_model/   — INT8 quantized OpenVINO IR
-# docker-compose mounts take-away/model/ → /app/models inside the container.
+#   take-away/models/yolo11n.pt                    — base PyTorch weights
+#   take-away/models/yolo11n_openvino_model/        — FP32 OpenVINO IR
+#   take-away/models/yolo11n_int8_openvino_model/   — INT8 quantized OpenVINO IR
+# docker-compose mounts take-away/models/ → /app/models inside the container.
 ###############################################
 echo ""
 echo "=========================================="

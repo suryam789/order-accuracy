@@ -112,7 +112,7 @@ STATION_ID  = os.environ.get("STATION_ID",  "station_unknown")
 PIPELINE_ID = os.environ.get("PIPELINE_ID", f"{STATION_ID}_{uuid.uuid4().hex[:8]}")
 
 # Tuneable parameters
-PRE_BUFFER_FRAMES      = int(os.environ.get("PRE_BUFFER_FRAMES",      "100"))  # Increased to hold frames during OCR warmup
+PRE_BUFFER_FRAMES      = int(os.environ.get("PRE_BUFFER_FRAMES",      "300"))  # Rolling frame window (300 @ 10fps = 30s)
 OCR_SAMPLE_INTERVAL    = int(os.environ.get("OCR_SAMPLE_INTERVAL",     "1"))
 ORDER_IDLE_TIMEOUT_SEC = int(os.environ.get("ORDER_IDLE_TIMEOUT_SEC",   "8"))
 MINIO_UPLOAD_TIMEOUT   = int(os.environ.get("MINIO_UPLOAD_TIMEOUT",    "10"))
@@ -122,7 +122,7 @@ FRAME_TS_MAP_MAXSIZE   = int(os.environ.get("FRAME_TS_MAP_MAXSIZE",   "200"))
 # OCR warmup: number of frames to wait for OCR process to become ready
 # Before OCR is ready, frames are buffered but orders are not confirmed
 # This prevents losing the first order (e.g., 384) while OCR models load (~30s)
-OCR_WARMUP_FRAMES      = int(os.environ.get("OCR_WARMUP_FRAMES",       "5"))
+OCR_WARMUP_FRAMES      = int(os.environ.get("OCR_WARMUP_FRAMES",       "2"))
 
 # Sequential OCR mode: when enabled, frame processing BLOCKS until OCR returns
 # Default: True (sequential mode) for accuracy. Set to false for high-throughput async mode.
@@ -207,7 +207,7 @@ _commit_received: bool = (not _need_2pc)
 _prepare_signaled: bool = False
 
 # 2PC timeout configuration
-SYNC_PREPARE_TIMEOUT = float(os.environ.get("SYNC_PREPARE_TIMEOUT", "180"))  # Max wait for commit (seconds) - increased for multi-worker
+SYNC_PREPARE_TIMEOUT = float(os.environ.get("SYNC_PREPARE_TIMEOUT", "60"))  # Max wait for commit (seconds)
 SYNC_CHECK_INTERVAL = float(os.environ.get("SYNC_CHECK_INTERVAL", "0.5"))    # Poll interval for commit signal
 
 
@@ -391,7 +391,7 @@ def _do_ocr_warmup():
     import time
     warmup_responses = 0
     warmup_start = time.time()
-    warmup_timeout = 180  # 3 minutes max for model loading (increased for multi-worker CPU contention)
+    warmup_timeout = 60  # 60s max for model loading
     
     while warmup_responses < OCR_WARMUP_FRAMES:
         elapsed = time.time() - warmup_start

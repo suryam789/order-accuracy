@@ -4,6 +4,8 @@ ovms-service/venv
 ovms-service/cache/
 ovms-service/models/*
 !ovms-service/models/graph_options.json
+ovms-service/export_model.py
+ovms-service/export_requirements.txt
 take-away/models
 take-away/model
 take-away/datasets/
