@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-24.0%2B-blue.svg)](https://docker.com)
-[![OpenVINO](https://img.shields.io/badge/OpenVINO-2024.6%2B-blue.svg)](https://docs.openvino.ai)
+[![OpenVINO](https://img.shields.io/badge/OpenVINO-2026.0-blue.svg)](https://docs.openvino.ai)
 
 ---
 
@@ -92,9 +92,8 @@ make up
 
 | Document | Description |
 |----------|-------------|
-| [Overview](dine-in/docs/user-guide/Overview.md) | Architecture and design |
 | [Getting Started](dine-in/docs/user-guide/get-started.md) | Installation guide |
-| [System Requirements](dine-in/docs/user-guide/system-requirements.md) | Hardware/software requirements |
+| [System Architecture & Requirements](dine-in/docs/user-guide/system-architecture-and-requirements.md) | Architecture, design, hardware/software requirements |
 | [How to Use](dine-in/docs/user-guide/how-to-use-application.md) | Usage instructions |
 | [Build from Source](dine-in/docs/user-guide/how-to-build-from-source.md) | Build instructions |
 | [API Reference](dine-in/docs/user-guide/api-reference.md) | REST API documentation |
@@ -146,9 +145,8 @@ make up-parallel WORKERS=4
 
 | Document | Description |
 |----------|-------------|
-| [Overview](take-away/docs/user-guide/Overview.md) | Architecture and design |
 | [Getting Started](take-away/docs/user-guide/get-started.md) | Installation guide |
-| [System Requirements](take-away/docs/user-guide/system-requirements.md) | Hardware/software requirements |
+| [System Architecture & Requirements](take-away/docs/user-guide/system-architecture-and-requirements.md) | Architecture, design, hardware/software requirements |
 | [How to Use](take-away/docs/user-guide/how-to-use-application.md) | Usage instructions |
 | [Build from Source](take-away/docs/user-guide/how-to-build-from-source.md) | Build instructions |
 | [API Reference](take-away/docs/user-guide/api-reference.md) | REST API documentation |
