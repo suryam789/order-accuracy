@@ -77,7 +77,7 @@ make up REGISTRY=false
 
 | Image | Tag |
 |-------|-----|
-| `intel/order-accuracy-dine-in` | `2026.0-rc2` |
+| `intel/order-accuracy-dine-in` | `2026.0.0` |
 
 ### 4. Access Services
 
