@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-24.0%2B-blue.svg)](https://docker.com)
-[![OpenVINO](https://img.shields.io/badge/OpenVINO-2024.6%2B-blue.svg)](https://docs.openvino.ai)
+[![OpenVINO](https://img.shields.io/badge/OpenVINO-2026.0-blue.svg)](https://docs.openvino.ai)
 
 ---
 
@@ -36,47 +36,48 @@ Before running the application, you must prepare your test data:
 
 > **Note**: The `images/` folder does not contain sample images by default. You must add your own images before testing.
 
-### 1. Setup OVMS Model (First Time Only)
-
-The VLM model must be exported before running the application:
+### 1. Configure Environment
 
 ```bash
-cd order-accuracy/ovms-service
-./setup_models.sh    # Export model (30-60 min first time)
+cd order-accuracy/dine-in
+make init-env
+# Edit .env if needed (defaults work for most setups)
+
+# Initialize git submodules (for benchmark tools)
+make update-submodules
+```
+
+### 2. Setup OVMS Model (First Time Only)
+
+The VLM model must be exported before running. The script reads `take-away/.env`, so complete step 1 first.
+
+```bash
+cd ../ovms-service
+./setup_models.sh    # Downloads and exports model (~30-60 min first time)
+cd ../dine-in
 ```
 
 This step:
-- Downloads Qwen2.5-VL-7B-Instruct from HuggingFace (~7GB)
-- Converts to OpenVINO format with INT8 quantization
-- Creates model files in `ovms-service/models/`
+- Downloads Qwen2.5-VL-7B-Instruct from HuggingFace (~7 GB)
+- Converts to OpenVINO INT8 format
 
-> **Note**: This only needs to be done once. The model files are shared between dine-in and take-away applications.
-
-### 2. Configure Environment
-
-```bash
-cd ../dine-in
-make init-env
-# Edit .env if needed (defaults work for most setups)
-```
+> **Note**: Only needed once. Model files are shared between dine-in and take-away.
 
 ### 3. Build and Start
 
 **Option A: Using Registry Images (default)**
 ```bash
-make build      # Pull image from registry
-make up         # Start services
+make build && make up
 ```
 
 **Option B: Build Locally from Source**
 ```bash
-make build REGISTRY=false   # Build and tag as intel/order-accuracy-dine-in:2026.0-rc1
-make up REGISTRY=false      # Start using locally built image
+make up REGISTRY=false
 ```
 
 | Image | Tag |
 |-------|-----|
-| `intel/order-accuracy-dine-in` | `2026.0-rc1` |
+| `intel/order-accuracy-dine-in` | `2026.0-rc2` |
 
 ### 4. Access Services
 
@@ -92,12 +93,10 @@ make up REGISTRY=false      # Start using locally built image
 ## Documentation
 
 - **Overview**
-  - [Overview](docs/user-guide/Overview.md): A high-level introduction.
-  - [Overview Architecture](./docs/user-guide/Overview.md#how-it-works): Highlevel architecture.
+  - [System Architecture & Requirements](docs/user-guide/system-architecture-and-requirements.md): Architecture, component details, hardware/software requirements, and pre-deployment checklist.
 
 - **Getting Started**
   - [Get Started](docs/user-guide/get-started.md): Step-by-step guide to get started with the sample application.
-  - [System Requirements](docs/user-guide/system-requirements.md): Hardware and software requirements for running the sample application.
   - [How to Use the Application](./docs/user-guide/how-to-use-application.md): Explore the application's features and verify its functionality.
 
 - **Deployment**

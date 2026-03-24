@@ -1,5 +1,38 @@
 # Release Notes
 
+---
+
+## Version 2026.0.0 (March 2026)
+
+**General Availability Release**
+
+Promoted from `2026.0-rc2` with no code changes. All functionality is identical to `2026.0-rc2`.
+
+### Published Images
+
+| Image | Tag |
+|-------|-----|
+| `intel/order-accuracy-dine-in` | `2026.0.0` |
+
+---
+
+## Version 2026.0-rc2 (March 2026)
+
+### What's New
+
+- **Image tag updated** to `2026.0-rc2`; `TAG` Makefile variable updated to `2026.0-rc2`
+- **FastAPI and Starlette version updates** in the application image
+- **`setup_models.sh` updated** to OVMS 2026.0 export branch (`releases/2026/0`); `openvino` and `openvino-tokenizers` updated to `2026.0.0rc3`
+- **`init-env` target added** to Makefile for creating `.env` from `.env.example`
+
+### Published Images
+
+| Image | Tag |
+|-------|-----|
+| `intel/order-accuracy-dine-in` | `2026.0-rc2` |
+
+---
+
 ## Version 2026.0-rc1 (March 2026)
 
 ### New Features

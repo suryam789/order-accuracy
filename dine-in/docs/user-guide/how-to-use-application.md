@@ -2,11 +2,11 @@
 
 Guide to using the Dine-In Order Accuracy application features.
 
-> **Note — `TARGET_DEVICE`**: To change the inference device mode, set `TARGET_DEVICE` in your `.env` file to `GPU`, `CPU`, or `AUTO`. After changing the device, re-run the setup script to update the model config:
+> **Note — `TARGET_DEVICE`**: To change the inference device, set `TARGET_DEVICE` in `.env` to `GPU`, `CPU`, or `NPU`, then re-run setup:
 > ```bash
-> cd ../ovms-service && ./setup_models.sh --app dine-in
+> cd ../ovms-service && ./setup_models.sh && cd ../dine-in
+> make down && make up
 > ```
-> You can also pass the device explicitly: `./setup_models.sh --device CPU`
 
 ## Gradio UI
 
@@ -184,7 +184,7 @@ Configuration options:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BENCHMARK_WORKERS` | 1 | Number of concurrent workers |
-| `BENCHMARK_DURATION` | 300 | Benchmark duration (seconds) |
+| `BENCHMARK_DURATION` | 180 | Benchmark duration (seconds) |
 | `BENCHMARK_TARGET_LATENCY_MS` | 25000 | Target latency threshold (ms) |
 | `BENCHMARK_LATENCY_METRIC` | avg | Metric: `avg`, `p95`, or `max` |
 | `BENCHMARK_DENSITY_INCREMENT` | 1 | Concurrent images per iteration |

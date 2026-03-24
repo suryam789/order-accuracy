@@ -617,7 +617,7 @@ plot-metrics: setup-dirs ## Generate plots from benchmark metrics
 		. venv/bin/activate && \
 		pip3 install -r requirements.txt && \
 		python3 usage_graph_plot.py \
-			--results_dir $(CURDIR)/$(RESULTS_DIR); \
+			--dir $(CURDIR)/$(RESULTS_DIR); \
 		deactivate \
 	)
 

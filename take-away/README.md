@@ -103,9 +103,8 @@ make up REGISTRY=false
 
 | Document | Description |
 |----------|-------------|
-| [Overview](docs/user-guide/Overview.md) | Comprehensive architecture and design |
+| [System Architecture & Requirements](docs/user-guide/system-architecture-and-requirements.md) | Architecture, design, hardware/software requirements, and pre-deployment checklist |
 | [Getting Started](docs/user-guide/get-started.md) | Installation and setup guide |
-| [System Requirements](docs/user-guide/system-requirements.md) | Hardware and software requirements |
 | [How to Use](docs/user-guide/how-to-use-application.md) | Usage instructions and workflows |
 | [Build from Source](docs/user-guide/how-to-build-from-source.md) | Source build instructions |
 | [API Reference](docs/user-guide/api-reference.md) | Complete REST API documentation |
