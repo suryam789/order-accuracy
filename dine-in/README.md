@@ -56,7 +56,7 @@ This step:
 
 ```bash
 cd ../dine-in
-cp .env.example .env
+make init-env
 # Edit .env if needed (defaults work for most setups)
 ```
 

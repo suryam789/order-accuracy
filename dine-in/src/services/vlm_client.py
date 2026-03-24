@@ -762,7 +762,7 @@ JSON: {"items":[{"name":"item","quantity":1}]}"""
                 
                 # Log custom metrics event
                 log_custom_event(
-                    "ovms_metrics", "ovms_vlm_request", unique_id,
+                    "ovms_vlm_request", "DINE-IN", unique_id, 
                     tps=tps,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,

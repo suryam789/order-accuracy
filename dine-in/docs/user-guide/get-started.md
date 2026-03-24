@@ -118,7 +118,7 @@ Before running the application, prepare your test data:
 
 ```bash
 # Copy .env template
-cp .env.example .env
+make init-env
 # Edit if needed (defaults work for most setups)
 ```
 

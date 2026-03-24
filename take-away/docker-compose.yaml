@@ -51,7 +51,7 @@ services:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/config | grep -q AVAILABLE"]
       interval: 10s
       timeout: 10s
-      retries: 10
+      retries: 100
       start_period: 45s
     networks:
       - order-accuracy-net
@@ -75,12 +75,13 @@ services:
       - /dev/dri:/dev/dri
     group_add:
       - video
+      - "992"
     volumes:
       - ${VIDEOS_DIR:-./storage/videos}:/videos
       - ${UPLOADS_DIR:-./storage/uploads}:/uploads
       - ${RESULTS_DIR:-./results}:/results
       - ${MODELS_DIR:-./models}:/models
-      - ${MODEL_DIR:-./model}:/model
+      - ${MODELS_DIR:-./models}:/model
       - ${CONFIG_DIR:-./config}:/config:ro
       - ${DATASETS_DIR:-./datasets}:/datasets:ro
       - ./src:/app:ro  # Mount src for live code changes (read-only)
@@ -129,7 +130,7 @@ services:
       
       # Frame pipeline tuning (order 384 fix: OCR models take ~30s to load)
       # Pre-buffer must hold frames until OCR is ready to detect orders
-      PRE_BUFFER_FRAMES: ${PRE_BUFFER_FRAMES:-1000}  # Frames to hold in buffer (1000 @ 10fps = 100s)
+      PRE_BUFFER_FRAMES: ${PRE_BUFFER_FRAMES:-300}  # Frames to hold in buffer (300 @ 10fps = 30s)
       OCR_WARMUP_FRAMES: ${OCR_WARMUP_FRAMES:-2}    # Frames to wait before OCR ready signal (reduced for faster startup)
       
       # Performance tuning
@@ -173,7 +174,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 100
       start_period: 30s
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -202,7 +203,7 @@ services:
       start_period: 30s
     volumes:
       - ${CONFIG_DIR:-./config}:/config:ro
-      - ${MODEL_DIR:-./model}:/app/models
+      - ${MODELS_DIR:-./models}:/app/models
       - ${DATASETS_DIR:-./datasets}:/app/datasets
       - ${RESULTS_DIR:-./results}/frame-selector-in:/app/debug/frame-selector-in  # Debug frames for Order Recall
     environment:
@@ -231,7 +232,7 @@ services:
       - order-accuracy-net
 
   gradio-ui:
-    image: intel/order-accuracy-take-away-ui:2026.0-rc1
+    image: intel/order-accuracy-take-away-ui:2026.0-rc2
     build:
       context: ./gradio-ui
       args:
@@ -263,11 +264,12 @@ services:
       - "9090:9090"
     volumes:
       - ${CONFIG_DIR:-./config}:/app/config:ro
-      - ${MODEL_DIR:-./model}:/models:ro  # For OpenVINO mode
+      - ${MODELS_DIR:-./models}:/models:ro  # For OpenVINO mode
     devices:
       - /dev/dri:/dev/dri  # GPU access for OpenVINO
     group_add:
       - video
+      - "992"
     environment:
       # App settings
       - APP_NAME=semantic-search-agent

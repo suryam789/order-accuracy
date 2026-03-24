@@ -52,29 +52,29 @@ class PipelineConfig:
     # RTSP source hardening - LOW LATENCY for fast connection
     rtsp_latency_ms: int = 0  # Zero buffering (was 200ms)
     rtsp_retry_count: int = 50  # Conservative retry count for RTSP reconnection
-    rtsp_timeout_us: int = 5000000   # 5 seconds
+    rtsp_timeout_us: int = 2000000   # 2 seconds
     rtsp_keepalive: bool = True
     rtsp_drop_on_latency: bool = True
     rtsp_protocols: str = "tcp"
     
     # Restart behavior
-    restart_base_delay_sec: float = 2.0
-    restart_max_delay_sec: float = 60.0
-    restart_stability_period_sec: float = 60.0  # Reset counter after stable for this long
+    restart_base_delay_sec: float = 1.0
+    restart_max_delay_sec: float = 15.0
+    restart_stability_period_sec: float = 30.0  # Reset counter after stable for this long
     
     # Circuit breaker
     circuit_breaker_max_failures: int = 5
-    circuit_breaker_window_sec: float = 300.0  # 5 minutes
-    circuit_breaker_cooldown_sec: float = 30.0  # Wait before retrying after circuit opens
+    circuit_breaker_window_sec: float = 120.0  # 2 minutes
+    circuit_breaker_cooldown_sec: float = 10.0  # Wait before retrying after circuit opens
     
     # Health monitoring
-    health_check_interval_sec: float = 5.0
-    stall_detection_timeout_sec: float = 300.0  # No EOS markers for this long = stalled (based on order duration)
+    health_check_interval_sec: float = 2.0
+    stall_detection_timeout_sec: float = 120.0  # No EOS markers for this long = stalled
     
     # RTSP availability check
-    rtsp_wait_timeout_sec: int = 120
-    rtsp_poll_interval_sec: float = 1.0
-    rtsp_probe_timeout_sec: int = 4
+    rtsp_wait_timeout_sec: int = 60
+    rtsp_poll_interval_sec: float = 0.5
+    rtsp_probe_timeout_sec: int = 2
     
     @classmethod
     def from_dict(cls, config: Dict) -> 'PipelineConfig':
@@ -83,7 +83,7 @@ class PipelineConfig:
         return cls(
             rtsp_latency_ms=pipeline_cfg.get('rtsp_latency_ms', 200),
             rtsp_retry_count=pipeline_cfg.get('rtsp_retry_count', 50),
-            rtsp_timeout_us=pipeline_cfg.get('rtsp_timeout_us', 5000000),
+            rtsp_timeout_us=pipeline_cfg.get('rtsp_timeout_us', 2000000),
             rtsp_keepalive=pipeline_cfg.get('rtsp_keepalive', True),
             rtsp_drop_on_latency=pipeline_cfg.get('rtsp_drop_on_latency', True),
             rtsp_protocols=pipeline_cfg.get('rtsp_protocols', 'tcp'),
@@ -92,12 +92,12 @@ class PipelineConfig:
             restart_stability_period_sec=pipeline_cfg.get('restart_stability_period_sec', 60.0),
             circuit_breaker_max_failures=pipeline_cfg.get('circuit_breaker_max_failures', 5),
             circuit_breaker_window_sec=pipeline_cfg.get('circuit_breaker_window_sec', 300.0),
-            circuit_breaker_cooldown_sec=pipeline_cfg.get('circuit_breaker_cooldown_sec', 30.0),
+            circuit_breaker_cooldown_sec=pipeline_cfg.get('circuit_breaker_cooldown_sec', 10.0),
             health_check_interval_sec=pipeline_cfg.get('health_check_interval_sec', 5.0),
-            stall_detection_timeout_sec=pipeline_cfg.get('stall_detection_timeout_sec', 300.0),
-            rtsp_wait_timeout_sec=pipeline_cfg.get('rtsp_wait_timeout_sec', 120),
-            rtsp_poll_interval_sec=pipeline_cfg.get('rtsp_poll_interval_sec', 1.0),
-            rtsp_probe_timeout_sec=pipeline_cfg.get('rtsp_probe_timeout_sec', 4),
+            stall_detection_timeout_sec=pipeline_cfg.get('stall_detection_timeout_sec', 120.0),
+            rtsp_wait_timeout_sec=pipeline_cfg.get('rtsp_wait_timeout_sec', 15),
+            rtsp_poll_interval_sec=pipeline_cfg.get('rtsp_poll_interval_sec', 0.5),
+            rtsp_probe_timeout_sec=pipeline_cfg.get('rtsp_probe_timeout_sec', 2),
         )
 
 
@@ -419,7 +419,7 @@ class StationWorker:
                     })
                     # Re-signal ready in case file was cleared
                     self._signal_pipeline_ready()
-                    time.sleep(5)  # Brief pause before retry
+                    time.sleep(2)  # Brief pause before retry
                 else:
                     self._log_structured("error", "rtsp_unavailable_at_startup", {
                         "timeout": self.pipeline_config.rtsp_wait_timeout_sec,

@@ -99,8 +99,8 @@ SYNC_DIR=${SYNC_DIR:-/sync/ready}
 OCR_READY_DIR=${OCR_READY_DIR:-/sync/ocr_ready}
 PREPARE_DIR=${PREPARE_DIR:-/sync/prepare}
 COMMIT_DIR=${COMMIT_DIR:-/sync/commit}
-SYNC_TIMEOUT=${SYNC_TIMEOUT:-180}  # Max seconds to wait for all workers (increased for multi-worker CPU contention)
-STARTUP_DELAY=${STARTUP_DELAY:-10}  # Fallback delay if sync mode is 'delay'
+SYNC_TIMEOUT=${SYNC_TIMEOUT:-60}  # Max seconds to wait for all workers
+STARTUP_DELAY=${STARTUP_DELAY:-5}  # Fallback delay if sync mode is 'delay'
 
 wait_for_ready_signals() {
   local num_workers=$1

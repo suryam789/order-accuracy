@@ -256,7 +256,7 @@ class OVMSVLMClient:
             
             if unique_id:
                 log_end_time("USECASE_1", unique_id)
-                log_custom_event("USECASE_1", "ovms_vlm_request", unique_id, 
+                log_custom_event("ovms_vlm_request", "USECASE_1", unique_id, 
                                  generated_tokens=generated_tokens,
                                  total_latency_sec=total_latency,
                                  tpot_sec=tpot,

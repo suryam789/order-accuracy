@@ -67,7 +67,7 @@ endif
 COMPOSE_FILE ?= docker-compose.yml
 
 # Version tag for registry images
-TAG ?= 2026.0-rc1
+TAG ?= 2026.0-rc2
 
 # Dine-In image configuration
 DINEIN_IMAGE_NAME ?= intel/order-accuracy-dine-in
@@ -99,7 +99,7 @@ NC := \033[0m  # No Color
         benchmark-stream-density benchmark-density benchmark-density-results clean \
         shell test-api benchmark-test benchmark-single \
         worker worker-start worker-stop worker-logs worker-results \
-        update-submodules fetch-benchmark build-benchmark \
+        update-submodules fetch-benchmark build-benchmark init-env \
         consolidate-metrics plot-metrics clean-images clean-containers clean-all
 
 help:
@@ -116,6 +116,7 @@ help:
 	@echo "  make update-submodules        - Clone/update git submodules"
 	@echo "  make build                    - Pull image from registry (default)"
 	@echo "  make build REGISTRY=false     - Build Docker image locally"
+	@echo "  make init-env                 - Create .env from template"
 	@echo "  make up                       - Start services with registry image (default)"
 	@echo "  make up REGISTRY=false        - Start services with local image"
 	@echo "  make down                     - Stop all services"
@@ -222,10 +223,28 @@ build:
 		docker pull $(DINEIN_IMAGE) || echo "$(YELLOW)Warning: Could not pull $(DINEIN_IMAGE). Build locally with REGISTRY=false$(NC)"; \
 	fi
 
+init-env:
+	@if [ -f .env ]; then \
+		echo "$(YELLOW).env file already exists. Backup and overwrite? [y/N]$(NC)"; \
+		read -r answer; \
+		if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
+			cp .env .env.backup; \
+			echo "$(GREEN)Backed up to .env.backup$(NC)"; \
+			cp .env.example .env; \
+			echo "$(GREEN)✓ Created .env from .env.example$(NC)"; \
+		else \
+			echo "$(YELLOW)Skipped$(NC)"; \
+		fi; \
+	else \
+		cp .env.example .env; \
+		echo "$(GREEN)✓ Created .env from .env.example$(NC)"; \
+	fi
+	@echo "Edit .env to customize your configuration."
+
+
 up:
 	@echo "Starting dine-in services..."
 	@mkdir -p results && chmod 777 results
-	@mkdir -p metrics && chmod 777 metrics
 	@if [ "$(REGISTRY)" = "false" ]; then \
 		echo "$(BLUE)Using locally built image: $(DINEIN_IMAGE)$(NC)"; \
 		DINEIN_IMAGE=$(DINEIN_IMAGE) docker compose up -d --no-build; \

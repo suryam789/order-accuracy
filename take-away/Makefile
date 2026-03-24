@@ -32,8 +32,7 @@ SCALING_MODE ?= fixed
 VLM_BACKEND ?= ovms
 OVMS_ENDPOINT ?= http://ovms-vlm:8000
 OVMS_MODEL_NAME ?= Qwen/Qwen2.5-VL-7B-Instruct
-OPENVINO_DEVICE ?= $(TARGET_DEVICE)
-TARGET_DEVICE ?= GPU
+OPENVINO_DEVICE ?= GPU
 
 # Semantic Service
 SEMANTIC_VLM_BACKEND ?= ovms
@@ -48,7 +47,7 @@ CONCURRENCY_INCREMENT ?= 1
 CONCURRENCY_MAX ?= 10
 REQUESTS_PER_LEVEL ?= 10
 REQUEST_TIMEOUT ?= 60
-RESULTS_DIR ?= results
+RESULTS_DIR ?= ./results
 OOM_PROTECTION ?= 1
 
 # Performance tools path
@@ -60,6 +59,7 @@ TAG ?= 2026.0-rc1
 # Sample video for quick-start testing (orders 384 → 651 → 925)
 # Hosted on the upstream repo's GitHub Releases. Override via env if needed:
 #   SAMPLE_VIDEO_URL=<url> make download-sample-video
+SAMPLE_VIDEO_URL ?= https://github.com/intel-retail/order-accuracy/releases/download/2026.0-rc1/test.mp4
 SAMPLE_VIDEO_DEST ?= storage/videos/test.mp4
 
 # Registry configuration: true=pull from registry, false=build locally
@@ -68,9 +68,9 @@ REGISTRY_BENCHMARK ?= intel/retail-benchmark:$(TAG)
 
 # Benchmark Order Accuracy settings
 BENCHMARK_WORKERS ?= 1
-BENCHMARK_TARGET_LATENCY_MS ?= 30000
+BENCHMARK_TARGET_LATENCY_MS ?= 25000
 BENCHMARK_LATENCY_METRIC ?= avg
-BENCHMARK_INIT_DURATION ?= $(if $(INIT_DURATION),$(INIT_DURATION),120)
+BENCHMARK_INIT_DURATION ?= 10
 BENCHMARK_DURATION ?= 200
 
 # OCR warmup - reduced from 5 to 2 for faster startup (~10s vs ~25s)
@@ -99,6 +99,9 @@ setup-dirs:
 	@[ -d metrics ] || mkdir metrics
 	@[ -d storage/videos ] || mkdir -p storage/videos
 	@[ -d storage/uploads ] || mkdir -p storage/uploads
+	@[ -d models ] || mkdir -p models
+	@[ -f storage/videos/.gitkeep ] || touch storage/videos/.gitkeep
+	@[ -f storage/uploads/.gitkeep ] || touch storage/uploads/.gitkeep
 	@echo "$(GREEN)✓ Directories created$(NC)"
 	@if [ ! -f "$(SAMPLE_VIDEO_DEST)" ]; then \
 		echo "$(YELLOW)Tip: No sample video found. Run 'make download-sample-video' to get one.$(NC)"; \
@@ -132,7 +135,7 @@ download-sample-video: setup-dirs
 
 # Required variables for specific modes
 REQUIRED_OVMS_VARS := OVMS_ENDPOINT OVMS_MODEL_NAME
-REQUIRED_OPENVINO_VARS := TARGET_DEVICE VLM_MODEL_PATH
+REQUIRED_OPENVINO_VARS := OPENVINO_DEVICE VLM_MODEL_PATH
 
 check-env:
 	@echo "$(BLUE)Checking environment configuration...$(NC)"
@@ -231,7 +234,7 @@ show-config:
 		echo "  OVMS_MODEL_NAME      = $(OVMS_MODEL_NAME)"; \
 	else \
 		echo "  VLM_MODEL_PATH       = $(VLM_MODEL_PATH)"; \
-		echo "  TARGET_DEVICE        = $(TARGET_DEVICE)"; \
+		echo "  OPENVINO_DEVICE      = $(OPENVINO_DEVICE)"; \
 	fi
 	@echo ""
 	@echo "$(YELLOW)Semantic Service:$(NC)"
@@ -427,23 +430,21 @@ benchmark: setup-dirs ## Run Order Accuracy benchmark (uses benchmark_order_accu
 	@echo "Workers: $(BENCHMARK_WORKERS)"
 	@echo "Duration: $(BENCHMARK_DURATION)s"
 	@echo "Init Duration: $(BENCHMARK_INIT_DURATION)s"
-	@echo "Target Device: $(TARGET_DEVICE)"
+	@echo "Target Device: $(OPENVINO_DEVICE)"
 	@echo ""
 	cd $(PERF_TOOLS_DIR) && \
 	( \
 		python3 -m venv venv && \
 		. venv/bin/activate && \
-		pip3 install --no-input -r requirements.txt && \
+		pip3 install -r requirements.txt && \
 		python3 benchmark_order_accuracy.py \
 			--compose_file $(CURDIR)/$(COMPOSE_FILE) \
 			--workers $(BENCHMARK_WORKERS) \
 			--duration $(BENCHMARK_DURATION) \
 			--init_duration $(BENCHMARK_INIT_DURATION) \
-			--profile benchmark \
 			--results_dir $(CURDIR)/$(RESULTS_DIR) \
-			--target_device $(TARGET_DEVICE) \
-			--skip_perf_tools \
-			--skip_export; \
+			--target_device $(OPENVINO_DEVICE) \
+			--skip_perf_tools; \
 		deactivate \
 	)
 
@@ -481,23 +482,21 @@ benchmark-oa: setup-dirs ## Run Order Accuracy benchmark with fixed workers
 	@echo "Workers: $(BENCHMARK_WORKERS)"
 	@echo "Duration: $(BENCHMARK_DURATION)s"
 	@echo "Init Duration: $(BENCHMARK_INIT_DURATION)s"
-	@echo "Target Device: $(TARGET_DEVICE)"
+	@echo "Target Device: $(OPENVINO_DEVICE)"
 	@echo ""
 	cd $(PERF_TOOLS_DIR) && \
 	( \
 		python3 -m venv venv && \
 		. venv/bin/activate && \
-		pip3 install --no-input -r requirements.txt && \
+		pip3 install -r requirements.txt && \
 		python3 benchmark_order_accuracy.py \
 			--compose_file $(CURDIR)/$(COMPOSE_FILE) \
 			--workers $(BENCHMARK_WORKERS) \
 			--duration $(BENCHMARK_DURATION) \
 			--init_duration $(BENCHMARK_INIT_DURATION) \
-			--profile benchmark \
 			--results_dir $(CURDIR)/$(RESULTS_DIR) \
-			--target_device $(TARGET_DEVICE) \
-			--skip_perf_tools \
-			--skip_export; \
+			--target_device $(OPENVINO_DEVICE) \
+			--skip_perf_tools; \
 		deactivate \
 	)
 
@@ -515,7 +514,7 @@ benchmark-stream-density: setup-dirs ## Run Order Accuracy stream density benchm
 	( \
 		python3 -m venv venv && \
 		. venv/bin/activate && \
-		pip3 install --no-input -r requirements.txt && \
+		pip3 install -r requirements.txt && \
 		OOM_PROTECTION=$(OOM_PROTECTION) python3 stream_density_latency_oa.py \
 			--compose_file $(CURDIR)/$(COMPOSE_FILE) \
 			--target_latency_ms $(BENCHMARK_TARGET_LATENCY_MS) \
@@ -601,7 +600,7 @@ consolidate-metrics: setup-dirs ## Consolidate metrics from multiple benchmark r
 	( \
 		python3 -m venv venv && \
 		. venv/bin/activate && \
-		pip3 install --no-input -r requirements.txt && \
+		pip3 install -r requirements.txt && \
 		python3 consolidate_multiple_run_of_metrics.py \
 			--root_directory $(CURDIR)/$(RESULTS_DIR) \
 			--output $(CURDIR)/$(RESULTS_DIR)/consolidated_metrics.csv; \
@@ -616,11 +615,9 @@ plot-metrics: setup-dirs ## Generate plots from benchmark metrics
 	( \
 		python3 -m venv venv && \
 		. venv/bin/activate && \
-		pip3 install --no-input -r requirements.txt && \
-		python3 parse_qmassa_metrics_to_json.py \
-			--directory $(CURDIR)/$(RESULTS_DIR) && \
+		pip3 install -r requirements.txt && \
 		python3 usage_graph_plot.py \
-			--dir $(CURDIR)/$(RESULTS_DIR); \
+			--results_dir $(CURDIR)/$(RESULTS_DIR); \
 		deactivate \
 	)
 
