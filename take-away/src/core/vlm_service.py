@@ -178,7 +178,7 @@ class VLMComponent:
             order_hint = (
                 f"This order is expected to contain:\n{expected_text}\n\n"
                 f"Carefully examine ALL {num_frames} frames for EACH of the above items.\n"
-                f"Report the total quantity of EACH item visible across ALL frames combined.\n\n"
+                f"For each item, report the MAXIMUM quantity visible in any single frame — do NOT sum counts across frames (the same item appears in multiple frames as packing progresses).\n\n"
             )
         else:
             order_hint = ""

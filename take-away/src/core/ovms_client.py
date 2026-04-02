@@ -66,13 +66,8 @@ class OVMSVLMClient:
         Returns:
             Base64 data URL string
         """
-        # Handle BGR to RGB conversion (OpenCV uses BGR)
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            image_rgb = image[:, :, ::-1]  # BGR -> RGB
-        else:
-            image_rgb = image
-
-        pil_img = Image.fromarray(image_rgb.astype('uint8'))
+        # Images arrive as RGB (loaded via PIL in vlm_service.py) — no channel flip needed.
+        pil_img = Image.fromarray(image.astype('uint8'))
         buffer = BytesIO()
         pil_img.save(buffer, format="JPEG", quality=82, optimize=True)
         img_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
@@ -105,14 +100,9 @@ class OVMSVLMClient:
                 else:
                     img_array = img
                 
-                # Convert BGR to RGB if needed
-                if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-                    img_rgb = img_array[:, :, ::-1]
-                else:
-                    img_rgb = img_array
-                
+                # Images arrive as RGB (loaded via PIL in vlm_service.py) — no channel flip needed.
                 # Save as JPEG
-                pil_img = Image.fromarray(img_rgb.astype('uint8'))
+                pil_img = Image.fromarray(img_array.astype('uint8'))
                 frame_path = folder_path / f"frame_{idx+1}.jpg"
                 pil_img.save(frame_path, format="JPEG", quality=90)
             

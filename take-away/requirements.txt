@@ -12,10 +12,12 @@ psutil
 easyocr
 torch
 torchvision
+# ultralytics: YOLO table-presence detection in frame_pipeline.py
+# Uses the INT8 OpenVINO model (yolo11n_int8_openvino_model) so PyTorch is only
+# needed for ultralytics bookkeeping, not for inference.
+ultralytics==8.3.0
 # openvino is already in the base image (intel/dlstreamer:2025.2.0-ubuntu22).
 # openvino-genai is NOT needed — VLM inference uses OVMS (external service),
 # not local openvino_genai.VLMPipeline. The semantic_matcher.py fallback
 # gracefully handles the missing import.
-# ultralytics is NOT needed — YOLO is only used by the frame-selector
-# service which has its own image (take-away-frame-selector).
 git+https://github.com/intel-retail/performance-tools.git@main#subdirectory=benchmark-scripts

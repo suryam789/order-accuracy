@@ -135,6 +135,31 @@ OCR_SEQUENTIAL_TIMEOUT = float(os.environ.get("OCR_SEQUENTIAL_TIMEOUT", "30.0"))
 _default_confirm = "1" if OCR_SEQUENTIAL_MODE else "3"
 OCR_CONFIRM_COUNT      = int(os.environ.get("OCR_CONFIRM_COUNT", _default_confirm))
 
+# ==========================================================
+# YOLO-GATED OCR FLOW
+# ---------------------------------------------------------
+# YOLO detects objects on the table every frame as a cheap gating signal.
+#   • Table empty  → skip OCR entirely
+#   • Table busy (objects detected) for > TABLE_BUSY_THRESHOLD_SEC → trigger OCR once
+#   • Once an order_id is confirmed → apply ORDER_LOCK_SEC lock so that the
+#     hand leaving the frame (table briefly empty) does NOT prematurely send EOS
+#   • Table empty + lock expired → write EOS, hand off to frame-selector / VLM
+#   • OCR is NEVER submitted on every frame — only once per retry window until
+#     an order is confirmed, eliminating the per-frame OCR bottleneck.
+#
+# Model: INT8 OpenVINO YOLO11n — same file written by setup_models.sh into the
+#        shared models volume (${MODELS_DIR}:/models in order-accuracy container).
+# Falls back gracefully to "assume objects present" when model is missing.
+# ==========================================================
+
+YOLO_MODEL_PATH          = os.environ.get("YOLO_MODEL_PATH",
+                               "/models/yolo11n_int8_openvino_model")
+YOLO_TABLE_CONF          = float(os.environ.get("YOLO_TABLE_CONF",          "0.25"))
+TABLE_BUSY_THRESHOLD_SEC  = float(os.environ.get("TABLE_BUSY_THRESHOLD_SEC",  "1.5"))
+TABLE_EMPTY_THRESHOLD_SEC = float(os.environ.get("TABLE_EMPTY_THRESHOLD_SEC", "2.0"))
+ORDER_LOCK_SEC            = float(os.environ.get("ORDER_LOCK_SEC",            "5.0"))
+OCR_RETRY_INTERVAL_SEC    = float(os.environ.get("OCR_RETRY_INTERVAL_SEC",    "2.0"))
+
 import logging
 logging.basicConfig(
     level=logging.INFO,
@@ -793,8 +818,31 @@ _active_order_start_ts:    float         = 0.0
 _ocr_candidate:      Optional[str] = None
 _ocr_vote_count:     int           = 0
 _ocr_first_vote_fid: int           = -1  # frame_id of the FIRST detection of current candidate
-_last_ocr_hit_ts:    float         = 0.0   # wall-clock of most recent OCR result
-_last_order_end_ts_ms: int         = 0     # epoch-ms when last order ended via IDLE TIMEOUT
+_last_ocr_hit_ts:          float = 0.0   # wall-clock of most recent OCR result
+_last_frame_collected_ts:  float = 0.0   # wall-clock when the most recent frame was enqueued
+                                          # used by the idle-timeout safety-net so that the
+                                          # timeout only fires when NO frames are being collected
+                                          # (OCR is only triggered once per order, so using
+                                          # _last_ocr_hit_ts would prematurely end active orders)
+_last_order_end_ts_ms: int   = 0         # epoch-ms when last order ended via IDLE TIMEOUT
+
+# YOLO table-presence subprocess state
+# YOLO must run in a separate spawned process — same reason as EasyOCR:
+# loading PyTorch/ultralytics inside the GStreamer gvapython process causes
+# "double free or corruption" memory crashes due to native thread conflicts.
+_yolo_ctx         = None
+_yolo_input_q     = None
+_yolo_output_q    = None
+_yolo_proc        = None
+_yolo_proc_ready: bool = False
+# Latest table state known from YOLO subprocess results.
+# Initialised to True ("assume busy") so the system is not locked out before
+# the YOLO model finishes loading — same safe-default as the fallback.
+_table_has_objects: bool            = True
+_table_busy_since:  Optional[float] = None  # wall-clock when objects FIRST detected
+_table_empty_since: Optional[float] = None  # wall-clock when table FIRST seen empty
+_ocr_last_trigger_ts: float         = 0.0   # wall-clock when OCR was last submitted
+_order_lock_until:    float         = 0.0   # table-empty timer suspended until this time
 
 
 def _flush_pre_buffer(order_id: str, since_ts_ms: Optional[int] = None) -> int:
@@ -835,26 +883,40 @@ def _on_ocr_confirmed(confirmed_order_id: str, ocr_fid: int) -> None:
     Called when OCR_CONFIRM_COUNT consecutive detections agree on an order_id.
     ocr_fid is the frame_id of the FIRST detection of the new candidate — used
     to look up the capture timestamp for timestamp-based bucket routing.
+
+    Sets ORDER_LOCK_SEC so that a briefly empty table (hand leaving after
+    placing the slip) does NOT prematurely trigger EOS.
     """
     global _active_order_id, _active_order_frame_count, _active_order_start_ts
+    global _order_lock_until
 
-    # Resolve the capture timestamp of the OCR-triggering frame
-    ocr_frame_ts: Optional[int] = _frame_ts_map.get(ocr_fid)
+    # Apply post-confirmation lock: ignore table-empty signals for ORDER_LOCK_SEC.
+    _order_lock_until = time.time() + ORDER_LOCK_SEC
+
+    # Compute the earliest valid timestamp for this order's frames.
+    # We take the MAXIMUM of three candidates so that we never accidentally
+    # include frames that belonged to the previous order:
+    #   a) _table_busy_since  — when YOLO first saw objects for this order
+    #   b) _last_order_end_ts_ms — when the previous order was finalised (EOS sent)
+    #   c) capture_ts_ms of the OCR-triggering frame (fallback)
+    # Using max() guarantees the boundary is always >= the previous order's end.
+    _candidates: list = []
+    if _table_busy_since:
+        _candidates.append(int(_table_busy_since * 1000))
+    if _last_order_end_ts_ms > 0:
+        _candidates.append(_last_order_end_ts_ms)
+    _ocr_fid_ts = _frame_ts_map.get(ocr_fid)
+    if _ocr_fid_ts:
+        _candidates.append(_ocr_fid_ts)
+    flush_since: Optional[int] = max(_candidates) if _candidates else None
 
     if _active_order_id is None:
         # ── IDLE → COLLECTING ──────────────────────────────────────────
         log(f"[STATE] [{ts()}] IDLE → COLLECTING order_id={confirmed_order_id} "
-            f"(ocr_fid={ocr_fid} ocr_frame_ts={ocr_frame_ts})")
+            f"lock={ORDER_LOCK_SEC}s (ocr_fid={ocr_fid} flush_since={flush_since})")
         _active_order_id          = confirmed_order_id
         _active_order_frame_count = 0
         _active_order_start_ts    = time.time()
-        # FIX: ALWAYS use ocr_frame_ts as boundary to prevent cross-contamination.
-        # Previously, for the first order (_last_order_end_ts_ms==0), we flushed
-        # ALL pre-buffer frames. This caused order 384 frames to be flushed into
-        # order 651's bucket when OCR missed 384 during warmup.
-        # Now we always use the first-detection timestamp as boundary, so only
-        # frames from when this order was detected get flushed to its bucket.
-        flush_since = ocr_frame_ts  # Always use boundary, never flush everything
         _flush_pre_buffer(confirmed_order_id, since_ts_ms=flush_since)
 
     elif confirmed_order_id != _active_order_id:
@@ -862,41 +924,164 @@ def _on_ocr_confirmed(confirmed_order_id: str, ocr_fid: int) -> None:
         prev = _active_order_id
         log(f"[STATE] [{ts()}] ORDER CHANGE {prev} → {confirmed_order_id} "
             f"after {_active_order_frame_count} frames "
-            f"(ocr_fid={ocr_fid} boundary_ts={ocr_frame_ts})")
+            f"lock={ORDER_LOCK_SEC}s (ocr_fid={ocr_fid} boundary_ts={flush_since})")
         _enqueue_eos(prev)
 
         _active_order_id          = confirmed_order_id
         _active_order_frame_count = 0
         _active_order_start_ts    = time.time()
-        # Only flush pre-buffer frames captured AFTER the OCR boundary
-        # — frames before it already belonged to the previous order.
-        _flush_pre_buffer(confirmed_order_id, since_ts_ms=ocr_frame_ts)
+        _flush_pre_buffer(confirmed_order_id, since_ts_ms=flush_since)
 
-    # same order → already collecting, nothing to do
+    # same order → already collecting; lock is refreshed above regardless
 
 
 def _check_order_idle_timeout() -> None:
-    """Finalise current order if no OCR result has arrived for ORDER_IDLE_TIMEOUT_SEC."""
-    global _active_order_id, _active_order_frame_count, _active_order_start_ts
-    global _ocr_candidate, _ocr_vote_count, _ocr_first_vote_fid, _last_order_end_ts_ms
+    """
+    Safety-net: finalise the active order if ORDER_IDLE_TIMEOUT_SEC seconds pass
+    with no frame being collected for it.
 
-    if _active_order_id is None or _last_ocr_hit_ts == 0.0:
+    The normal finalisation path is:
+        YOLO table-empty ≥ TABLE_EMPTY_THRESHOLD_SEC → _finalize_current_order()
+
+    This only fires when YOLO is unavailable, or the camera freezes, or YOLO
+    persistently returns false-positive detections that prevent the empty timer
+    from accumulating.
+
+    NOTE: we use _last_frame_collected_ts (not _last_ocr_hit_ts) because OCR is
+    intentionally triggered only ONCE per order — basing the timeout on OCR hits
+    caused premature EOS 8 seconds after order confirmation even while frames
+    were actively being collected.
+    """
+    if _active_order_id is None or _last_frame_collected_ts == 0.0:
         return
 
-    elapsed = time.time() - _last_ocr_hit_ts
+    elapsed = time.time() - _last_frame_collected_ts
     if elapsed >= ORDER_IDLE_TIMEOUT_SEC:
-        log(f"[STATE] [{ts()}] IDLE TIMEOUT ({elapsed:.1f}s no OCR) — "
-            f"finalising order_id={_active_order_id} "
-            f"({_active_order_frame_count} frames uploaded)")
-        _enqueue_eos(_active_order_id)
-        _last_order_end_ts_ms     = int(time.time() * 1000)  # mark end of this order
-        _active_order_id          = None
-        _active_order_frame_count = 0
-        _active_order_start_ts    = 0.0
-        _ocr_candidate            = None
-        _ocr_vote_count           = 0
-        _ocr_first_vote_fid       = -1
-        _pre_buffer.clear()  # stale frames must not leak into next order
+        log(f"[STATE] [{ts()}] IDLE-TIMEOUT safety-net "
+            f"({elapsed:.1f}s since last frame collected) — "
+            f"finalising order_id={_active_order_id}")
+        _finalize_current_order()
+
+
+# ==========================================================
+# YOLO TABLE PRESENCE DETECTION  (subprocess-based)
+# ---------------------------------------------------------
+# ultralytics/PyTorch must NOT be imported in the GStreamer gvapython process.
+# Loading it causes "double free or corruption" crashes from native thread
+# conflicts — identical to the EasyOCR issue solved by ocr_worker.py.
+# Solution: spawn a dedicated YOLO worker process and communicate via queues.
+# ==========================================================
+
+def _ensure_yolo_proc() -> bool:
+    """
+    Lazily start the YOLO worker subprocess on the first frame.
+    Returns True when the subprocess exists (even if model is still loading).
+    Safe to call every frame — no-ops if already started.
+    """
+    global _yolo_ctx, _yolo_input_q, _yolo_output_q, _yolo_proc
+
+    if _yolo_proc is not None:
+        return True
+
+    try:
+        import multiprocessing as _mp
+
+        _src_dir = '/app'
+        _cur_pp  = os.environ.get('PYTHONPATH', '')
+        if _src_dir not in _cur_pp.split(':'):
+            os.environ['PYTHONPATH'] = f"{_src_dir}:{_cur_pp}" if _cur_pp else _src_dir
+
+        _yolo_ctx     = _mp.get_context('spawn')
+        _yolo_input_q = _yolo_ctx.Queue(maxsize=4)   # small: we only need latest frame
+        _yolo_output_q = _yolo_ctx.Queue(maxsize=16)
+
+        from yolo_worker import run_worker
+        _yolo_proc = _yolo_ctx.Process(
+            target=run_worker,
+            args=(_yolo_input_q, _yolo_output_q, YOLO_MODEL_PATH, YOLO_TABLE_CONF),
+            daemon=True,
+            name=f"yolo-worker-{STATION_ID}",
+        )
+        _yolo_proc.start()
+        log(f"[YOLO] [{ts()}] subprocess started pid={_yolo_proc.pid} (model loading...)")
+        return True
+    except Exception as _e:
+        log(f"[YOLO] [{ts()}] failed to start subprocess: {_e}")
+        return False
+
+
+def _yolo_submit_frame(frame_id: int, image: np.ndarray) -> None:
+    """Send a frame to the YOLO subprocess (non-blocking; drops if queue full)."""
+    if _yolo_input_q is None:
+        return
+    try:
+        small = cv2.resize(image, (320, 320))
+        h, w  = small.shape[:2]
+        _yolo_input_q.put_nowait((frame_id, h, w, small.tobytes()))
+    except Exception:
+        pass  # queue full — use cached _table_has_objects state
+
+
+def _yolo_drain_results() -> None:
+    """
+    Drain all pending YOLO results from the output queue and update the
+    module-level _table_has_objects state variable.
+    The pipeline thread reads _table_has_objects; this updates it asynchronously.
+    """
+    global _yolo_proc_ready, _table_has_objects
+
+    if _yolo_output_q is None:
+        return
+    try:
+        while True:
+            item = _yolo_output_q.get_nowait()
+            if not isinstance(item, tuple) or len(item) != 2:
+                continue
+            fid, value = item
+            if fid == 'ready':
+                if not _yolo_proc_ready:
+                    log(f"[YOLO] [{ts()}] subprocess ready (model loaded)")
+                    _yolo_proc_ready = True
+                continue
+            _table_has_objects = bool(value)
+    except Exception:
+        pass
+
+
+def _finalize_current_order() -> None:
+    """
+    Write EOS for the active order and reset all order/table state to IDLE.
+
+    Normal trigger: table detected empty + ORDER_LOCK_SEC has elapsed.
+    Safety-net trigger: ORDER_IDLE_TIMEOUT_SEC reached without an OCR hit
+                        (in case YOLO table-detection misbehaves).
+    """
+    global _active_order_id, _active_order_frame_count, _active_order_start_ts
+    global _ocr_candidate, _ocr_vote_count, _ocr_first_vote_fid, _last_ocr_hit_ts
+    global _last_order_end_ts_ms, _order_lock_until, _ocr_last_trigger_ts
+    global _table_busy_since, _table_empty_since, _last_frame_collected_ts
+
+    if _active_order_id is None:
+        return
+
+    log(f"[STATE] [{ts()}] FINALISE order_id={_active_order_id} "
+        f"({_active_order_frame_count} frames) — writing EOS")
+    _enqueue_eos(_active_order_id)
+
+    _last_order_end_ts_ms     = int(time.time() * 1000)
+    _active_order_id          = None
+    _active_order_frame_count = 0
+    _active_order_start_ts    = 0.0
+    _ocr_candidate            = None
+    _ocr_vote_count           = 0
+    _ocr_first_vote_fid       = -1
+    _last_ocr_hit_ts          = 0.0
+    _last_frame_collected_ts  = 0.0
+    _order_lock_until         = 0.0
+    _ocr_last_trigger_ts      = 0.0
+    _table_busy_since         = None
+    _table_empty_since        = None
+    _pre_buffer.clear()
 
 
 # ==========================================================
@@ -1031,9 +1216,10 @@ def process_frame(frame: "VideoFrame") -> bool:
             log(f"[2PC-GATE] [{ts()}] Waiting for COMMIT signal - frame {_frame_counter} buffered only")
     # ========== END 2PC COMMIT GATE ==========
 
-    # Start OCR subprocess on very first frame
+    # Start OCR and YOLO subprocesses on very first frame
     if _frame_counter == 1:
         _ensure_ocr_proc()
+        _ensure_yolo_proc()
 
     # Periodic status log
     if _frame_counter <= 3 or _frame_counter % 50 == 0:
@@ -1067,54 +1253,88 @@ def process_frame(frame: "VideoFrame") -> bool:
     # 5. Always feed the rolling pre-buffer
     _pre_buffer.append(meta)
 
-    # 6. OCR processing — mode-dependent
-    # NOTE: Skip OCR if COMMIT hasn't been received (still in leader/sync phase)
-    # This avoids wasting OCR cycles on black frames during synchronization
+    # 6. YOLO table-presence gate + YOLO-triggered OCR
+    # NOTE: skip entirely until 2PC COMMIT is received (avoids wasting cycles
+    #       on leader/black frames during synchronization).
     if not _commit_received:
-        # Still waiting for 2PC COMMIT - skip OCR, just buffer frames
         return True
-    
-    if OCR_SEQUENTIAL_MODE:
-        # ═══════════════════════════════════════════════════════════════
-        # SEQUENTIAL MODE: Submit EVERY frame and BLOCK until OCR returns
-        # Frame processing halts until we get the OCR result
-        # ═══════════════════════════════════════════════════════════════
-        ocr_fid, ocr_oid = _ocr_submit_frame_blocking(_frame_counter, image)
-        _process_ocr_result(ocr_fid, ocr_oid)
-    else:
-        # ═══════════════════════════════════════════════════════════════
-        # ASYNC MODE: Non-blocking drain + periodic submission
-        # Frames flow continuously; OCR runs in parallel
-        # ═══════════════════════════════════════════════════════════════
-        # Drain OCR results FIRST so that the upload decision below (step 7)
-        # always uses the freshest candidate/vote state.
-        for ocr_fid, ocr_oid in _ocr_drain_results():
+
+    global _table_busy_since, _table_empty_since, _ocr_last_trigger_ts, _order_lock_until
+
+    # Submit this frame to the YOLO subprocess (non-blocking; drops if queue full).
+    # Drain any results that arrived since the last frame → updates _table_has_objects.
+    _yolo_submit_frame(_frame_counter, image)
+    _yolo_drain_results()
+
+    if _table_has_objects:
+        # ── Table is BUSY ───────────────────────────────────────────────
+        # Any object resets the empty timer silently — no log until confirmed.
+        _table_empty_since = None
+
+        if _table_busy_since is None:
+            _table_busy_since = time.time()
+            log(f"[TABLE] [{ts()}] frame={_frame_counter} objects detected — table BUSY")
+
+        busy_sec     = time.time() - _table_busy_since
+        ocr_retry_ok = (time.time() - _ocr_last_trigger_ts) >= OCR_RETRY_INTERVAL_SEC
+
+        # Fire OCR once when the table has been busy long enough and no order
+        # is active yet.  OCR is NOT submitted while an order is already open —
+        # that is the "only triggered once per order" guarantee.
+        if _active_order_id is None and busy_sec >= TABLE_BUSY_THRESHOLD_SEC and ocr_retry_ok:
+            log(f"[TABLE] [{ts()}] frame={_frame_counter} busy {busy_sec:.1f}s — "
+                f"triggering OCR (retry_interval={OCR_RETRY_INTERVAL_SEC}s)")
+            _ocr_last_trigger_ts = time.time()
+            ocr_fid, ocr_oid = _ocr_submit_frame_blocking(_frame_counter, image)
             _process_ocr_result(ocr_fid, ocr_oid)
 
-        # Submit current frame to OCR subprocess every N frames
-        if _frame_counter % OCR_SAMPLE_INTERVAL == 0:
-            _ocr_submit_frame(_frame_counter, image)
+    else:
+        # ── Table appears empty ─────────────────────────────────────────
+        # Do NOT reset _table_busy_since here.  YOLO can flicker (one frame
+        # with no detections between frames that do have objects).  Resetting
+        # the busy timer on any single empty frame means the 1.5s threshold
+        # can never accumulate when YOLO oscillates, so OCR is never triggered.
+        # _table_busy_since is only cleared in _finalize_current_order() once
+        # the table is confirmed empty for TABLE_EMPTY_THRESHOLD_SEC.
 
-    # 7. If collecting, route frame directly to upload queue.
-    # IMPORTANT: stop live-uploading to the current order once a competing
-    # OCR candidate appears.  Those transition frames will be held in the
-    # pre-buffer and flushed to the NEW order when the vote is confirmed.
-    # Without this guard, frames showing order Y would be uploaded to order
-    # X's bucket during the vote-accumulation window.
-    if _active_order_id is not None:
-        candidate_is_different = (
-            _ocr_candidate is not None
-            and _ocr_candidate != _active_order_id
-        )
-        if not candidate_is_different:
-            _enqueue_frame(meta, _active_order_id)
-            _active_order_frame_count += 1
+        # ORDER_LOCK_SEC takes priority: while the lock is active (hand just
+        # placed the slip and left), suppress the empty timer entirely.
+        # No log — waiting silently until lock expires.
+        lock_active = time.time() <= _order_lock_until
+
+        if not lock_active:
+            # Lock expired (or no order active) — run the 2-second empty timer.
+            if _table_empty_since is None:
+                _table_empty_since = time.time()
+                # Intentionally no log here — only log once confirmed empty.
+            else:
+                empty_sec = time.time() - _table_empty_since
+                if empty_sec >= TABLE_EMPTY_THRESHOLD_SEC:
+                    if _active_order_id is not None:
+                        log(f"[TABLE] [{ts()}] table confirmed empty for "
+                            f"{empty_sec:.1f}s — finalising order_id={_active_order_id}")
+                        _finalize_current_order()
+                    else:
+                        # No active order — reset so the timer doesn't keep firing.
+                        _table_empty_since = None
         else:
-            log(f"[PIPELINE] [{ts()}] frame={_frame_counter} holding back from "
-                f"order_id={_active_order_id} (candidate={_ocr_candidate} "
-                f"votes={_ocr_vote_count}/{OCR_CONFIRM_COUNT})")
+            # Lock active — silently discard any empty-timer state.
+            _table_empty_since = None
 
-    # 8. Idle-timeout check every 10 frames
+    # 7. Collect frames for the active order.
+    # Frames are sent to MinIO for every frame while an order is open —
+    # regardless of live table state.  The order remains open until
+    # _finalize_current_order() is called (table confirmed empty for 2s).
+    if _active_order_id is not None:
+        _enqueue_frame(meta, _active_order_id)
+        _active_order_frame_count += 1
+        _last_frame_collected_ts = time.time()  # keep idle-timeout safety-net alive
+        if _active_order_frame_count % 50 == 0:
+            log(f"[COLLECT] [{ts()}] order_id={_active_order_id} "
+                f"frames_collected={_active_order_frame_count} "
+                f"frame={_frame_counter}")
+
+    # 8. Safety-net idle-timeout (fires if YOLO table detection misbehaves)
     if _frame_counter % 10 == 0:
         _check_order_idle_timeout()
 

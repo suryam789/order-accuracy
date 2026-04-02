@@ -863,20 +863,20 @@ def count_items(frame, frame_key="?"):
 
     Returns:
         (count, detected_label_set)
-            count              : number of high-confidence items (>= ITEM_COUNT_CONF),
-                                 or -1 if a skip-label was detected.
+            count              : number of valid items seen at >= SKIP_LABEL_CONF
+                                 (non-skip, non-non-food), used as the primary sort
+                                 score for frame selection.  Using SKIP_LABEL_CONF
+                                 (not the higher ITEM_COUNT_CONF) ensures that frames
+                                 with all items present but at lower confidence still
+                                 score higher than frames with fewer items.
+                                 Returns -1 if a skip-label was detected.
             detected_label_set : set of ALL YOLO class names seen at >= SKIP_LABEL_CONF
-                                 (used for diversity scoring even at lower confidence).
+                                 (used for expected-item diversity scoring).
     """
-    # Run YOLO at the skip-label threshold.  Skip-labels default to ["hand"] only;
-    # 'person' is intentionally excluded because the packing worker is always
-    # visible in food-placement frames and must not cause them to be dropped.
     result = model(frame, conf=SKIP_LABEL_CONF, verbose=False)[0]
 
-    # Collect ALL detected labels (including low-conf) for diversity scoring.
+    # Collect ALL detected labels for diversity scoring.
     detected_label_set = set()
-
-    # Log every raw detection for diagnosis
     all_detections = []
     for box in result.boxes:
         cls_name = result.names.get(int(box.cls), "unknown").lower()
@@ -886,38 +886,36 @@ def count_items(frame, frame_key="?"):
     logger.info(f"[YOLO][{frame_key}] Detections (conf>={SKIP_LABEL_CONF}): "
                 f"{all_detections if all_detections else 'none'}")
 
-    # If ANY skip-label is present → discard frame
+    # If ANY skip-label is present → discard the whole frame.
     for box in result.boxes:
         cls_name = result.names.get(int(box.cls), "").lower()
         if cls_name in SKIP_LABELS:
             logger.info(f"[YOLO][{frame_key}] DROPPED — skip label '{cls_name}' "
                         f"detected at conf={float(box.conf):.2f}")
-            return -1, set()   # mark frame as invalid
+            return -1, set()
 
-    # Count valid objects only above the higher item-count threshold.
-    # This suppresses false-positive classes (clock, remote, dining table etc.)
-    # that YOLO hallucinates on food items at low confidence.
+    # Count ALL valid food detections at SKIP_LABEL_CONF.
+    # Using SKIP_LABEL_CONF (0.1) rather than the higher ITEM_COUNT_CONF (0.25)
+    # means that a frame containing 4 items detected at conf 0.15 scores 4,
+    # not 0.  This guarantees the frame with the most physically present objects
+    # wins the sort — even when YOLO confidence is modest.
     count = 0
     valid_items = []
-    low_conf_ignored = []
+    slip_ignored = []
     for box in result.boxes:
         cls_name = result.names.get(int(box.cls), "").lower()
         conf_val  = float(box.conf)
         if cls_name in SKIP_LABELS:
-            continue   # already checked above
+            continue
         if cls_name in NON_FOOD_LABELS:
-            low_conf_ignored.append(f"{cls_name}(slip/{conf_val:.2f})")
-            continue   # order-slip misdetection — ignore silently
-        if conf_val >= ITEM_COUNT_CONF:
-            count += 1
-            valid_items.append(f"{cls_name}({conf_val:.2f})")
-        else:
-            low_conf_ignored.append(f"{cls_name}({conf_val:.2f})")
+            slip_ignored.append(f"{cls_name}({conf_val:.2f})")
+            continue
+        count += 1
+        valid_items.append(f"{cls_name}({conf_val:.2f})")
 
-    if low_conf_ignored:
-        logger.info(f"[YOLO][{frame_key}] Ignored low-conf items "
-                    f"(conf<{ITEM_COUNT_CONF}): {low_conf_ignored}")
-    logger.info(f"[YOLO][{frame_key}] ACCEPTED — {count} valid item(s): {valid_items}")
+    if slip_ignored:
+        logger.info(f"[YOLO][{frame_key}] Ignored non-food labels (slip/noise): {slip_ignored}")
+    logger.info(f"[YOLO][{frame_key}] ACCEPTED — {count} item(s): {valid_items}")
     return count, detected_label_set
 
 
@@ -1039,20 +1037,14 @@ def process_completed_order(station_id: str, order_id: str, keys: List[str], sta
         state.consecutive_no_item_frames = 0
         # Continue to process this order (don't return)
 
-    # ── Order-aware temporal-spread frame selection ───────────────────────────
-    # Primary goal: ensure the selected TOP_K frames collectively cover as many
-    # expected order items as possible — even items YOLO detects at low confidence
-    # (below ITEM_COUNT_CONF) such as bananas at 0.13–0.24 conf.
+    # ── Score-based frame selection (highest item count wins) ────────────────
+    # Sort ALL accepted frames by descending object count, then by diversity.
+    # The frames at the END of an order typically have the most items on the
+    # table (packing is complete) — temporal buckets would give those frames
+    # only 1 slot; a score sort ensures they naturally float to the top.
     #
-    # Algorithm:
-    #   1. Within each temporal bucket pick the frame with the highest
-    #      (expected_item_coverage, high_conf_item_count) composite score.
-    #   2. After temporal selection, if any expected items are still uncovered,
-    #      swap the lowest-value selected frame for the best uncovered-item frame
-    #      (forced coverage pass).
-    #
-    # Fallback: if fewer accepted frames than buckets, fall back to score-only
-    # sort (avoids wasting slots on empty buckets).
+    # After score selection we still run the forced-coverage pass so we don't
+    # miss an expected item that only appears in a lower-scoring frame.
     # ─────────────────────────────────────────────────────────────────────────
 
     # YOLO class synonyms for expected order items (used for diversity scoring).
@@ -1064,34 +1056,37 @@ def process_completed_order(station_id: str, order_id: str, keys: List[str], sta
         """Number of expected YOLO synonyms visible in this frame."""
         return len(expected_yolo & detected_labels) if expected_yolo else 0
 
-    # scored is currently in insertion order (same as keys order = frame number order)
-    # Keep temporal order for bucket splitting.
     n = len(scored)
-    topk = []
 
-    if n >= TOP_K:
-        # Split into TOP_K equal buckets and pick best from each
-        bucket_size = n / TOP_K
-        for b in range(TOP_K):
-            start = int(b * bucket_size)
-            end   = int((b + 1) * bucket_size)
-            bucket = scored[start:end]
-            if not bucket:
-                continue
-            # Best frame: primary = expected item coverage (diversity),
-            # secondary = total high-conf item count, tertiary = latest key.
-            best = max(bucket, key=lambda x: (_diversity(x[1]), x[0], x[2]))
-            topk.append(best)
-            logger.info(f"[{station_id}][TOP-K] bucket_{b+1} "
-                        f"[frames {start}–{end-1} of {n}]: "
-                        f"chose {best[2].split('/')[-1]} "
-                        f"(yolo_items={best[0]}, diversity={_diversity(best[1])})")
-    else:
-        # Fewer frames than buckets — fall back to diversity+score sort
-        logger.info(f"[{station_id}][TOP-K] only {n} accepted frame(s) < TOP_K={TOP_K}, "
-                    f"using diversity+score fallback")
-        scored_sorted = sorted(scored, key=lambda x: (_diversity(x[1]), x[0], x[2]), reverse=True)
-        topk = scored_sorted[:n]
+    def _frame_num(key: str) -> int:
+        """Extract numeric frame index for correct numeric tie-breaking.
+        e.g. 'station_1/384/frame_100.jpg' → 100.
+        Lexicographic sort on the raw key string is wrong because
+        'frame_9.jpg' > 'frame_100.jpg' alphabetically.
+        """
+        try:
+            return int(key.rsplit('/', 1)[-1].replace('frame_', '').replace('.jpg', ''))
+        except (ValueError, IndexError):
+            return 0
+
+    # Sort: primary = item count (desc), secondary = diversity (desc),
+    # tertiary = frame number (desc, so LATER frames win ties — they show
+    # the most complete packing state).
+    scored_sorted = sorted(
+        scored,
+        key=lambda x: (x[0], _diversity(x[1]), _frame_num(x[2])),
+        reverse=True,
+    )
+    topk = scored_sorted[:TOP_K]
+
+    logger.info(f"[{station_id}][TOP-K] order={order_id} — scored {n} frames, "
+                f"selected top-{len(topk)} by item count:")
+    for rank, (items, labels, key, _) in enumerate(topk, 1):
+        logger.info(f"[{station_id}][TOP-K]   rank_{rank} → {key.split('/')[-1]}  "
+                    f"(yolo_items={items}, diversity={_diversity(labels)})")
+
+    if n < TOP_K:
+        logger.info(f"[{station_id}][TOP-K] fewer frames ({n}) than TOP_K={TOP_K}, using all")
 
     # ── Forced coverage pass ─────────────────────────────────────────────────
     # After temporal selection, check if any expected items are still uncovered.
@@ -1126,11 +1121,6 @@ def process_completed_order(station_id: str, order_id: str, keys: List[str], sta
                         topk[worst_idx] = best_alt
                         logger.info(f"[{station_id}][DIVERSITY] Swapped {old_key} → {new_key} "
                                     f"to cover '{missing_label}'")
-
-    logger.info(f"[{station_id}][TOP-K] order={order_id} — selected {len(topk)} frame(s):")
-    for rank, (items, _labels, key, _) in enumerate(topk, 1):
-        logger.info(f"[{station_id}][TOP-K]   rank_{rank} → {key.split('/')[-1]}  "
-                    f"(yolo_items={items}, diversity={_diversity(_labels)})")
 
     for rank, (items, _labels, key, frame) in enumerate(topk, 1):
         # Save to: {station_id}/{order_id}/rank_{rank}.jpg
