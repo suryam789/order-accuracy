@@ -85,15 +85,12 @@ services:
       - ${CONFIG_DIR:-./config}:/config:ro
       - ${DATASETS_DIR:-./datasets}:/datasets:ro
       - ./src:/app:ro  # Mount src for live code changes (read-only)
-      - pipeline_sync:/sync  # Shared sync volume for pipeline readiness signals
     environment:
       # Service mode configuration
       SERVICE_MODE: ${SERVICE_MODE:-single}
       WORKERS: ${WORKERS:-0}
       VLM_WORKERS: ${VLM_WORKERS:-2}
       SCALING_MODE: ${SCALING_MODE:-fixed}
-      # Pipeline synchronization directory
-      PIPELINE_SYNC_DIR: /sync/ready
       # When the external oa_frame_selector service is running it owns frame
       # selection and VLM calls. Station worker skips its own duplicate path.
       EXTERNAL_FRAME_SELECTOR: ${EXTERNAL_FRAME_SELECTOR:-true}
@@ -316,8 +313,8 @@ services:
     networks:
       - order-accuracy-net
 
-  # RTSP Streamer - Converts video files to RTSP streams
-  # Starts AFTER order-accuracy and frame-selector are healthy to ensure pipelines are ready
+  # RTSP Streamer - On-demand video streaming via MediaMTX
+  # Streams start only when a GStreamer client connects — no sync needed.
   rtsp-streamer:
     image: intel/order-accuracy-take-away-rtsp:2026.0.0
     build:
@@ -333,42 +330,19 @@ services:
     profiles:
       - parallel
       - benchmark
-    depends_on:
-      order-accuracy:
-        condition: service_healthy
-      frame-selector:
-        condition: service_healthy
     volumes:
-      - ${VIDEOS_DIR:-./storage/videos}:/media:ro  # Mount videos as read-only
-      - pipeline_sync:/sync  # Shared sync volume for pipeline readiness signals
+      - ${VIDEOS_DIR:-./storage/videos}:/media:ro
     environment:
       - MEDIA_DIR=/media
-      - RTSP_PORT=8554
-      - RTSP_STREAMER_HOST=rtsp-streamer
-      - RTSP_STREAMER_PORT=8554
-      # Stream configuration - read from .env
-      - WORKERS=${WORKERS:-1}
-      - RTSP_STREAM_NAME=${RTSP_STREAM_NAME:-test}
-      - RTSP_STREAMS=${RTSP_STREAMS:-}
-      # Loop configuration: -1=infinite, 1=once, 2=twice, etc.
-      - LOOP_COUNT=${LOOP_COUNT:-1}
-      # Seconds of black frames BEFORE each loop (except first) - gives pipeline reset time
-      # Needs to be longer than VLM inference time (~15s) to ensure clean state reset
-      - LOOP_WARMUP=${LOOP_WARMUP:-2}
-      # Pipeline synchronization: signal=wait for ready files, delay=legacy timer, none=immediate
-      - SYNC_MODE=${SYNC_MODE:-signal}
-      - SYNC_DIR=/sync/ready
-      - SYNC_TIMEOUT=${SYNC_TIMEOUT:-120}
-      - STARTUP_DELAY=${STARTUP_DELAY:-10}  # Fallback delay if SYNC_MODE=delay
     ports:
-      - "8554:8554"  # RTSP port
+      - "8554:8554"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "nc", "-z", "127.0.0.1", "8554"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 0s
+      start_period: 5s
     networks:
       - order-accuracy-net
 
@@ -410,4 +384,3 @@ networks:
 
 volumes:
   minio_data:
-  pipeline_sync:  # Shared volume for RTSP/GStreamer pipeline synchronization

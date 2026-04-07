@@ -278,12 +278,6 @@ class StationWorker:
         self._frames_buffer: List = []
         
         # =================================================================
-        # Sync Signal Control
-        # =================================================================
-        # When True, preserve ready signal on cleanup (for RTSP sync to work)
-        self._preserve_ready_signal: bool = False
-        
-        # =================================================================
         # Reusable Components (initialized in run())
         # =================================================================
         self._pipeline_runner = None
@@ -399,6 +393,14 @@ class StationWorker:
             
             self._running = True
             
+            # Pre-warm OCR models BEFORE connecting to RTSP.
+            # With on-demand RTSP streaming, the video only starts when
+            # GStreamer connects. By warming OCR first, we ensure models
+            # are loaded and OS page cache is hot, so frame_pipeline's
+            # OCR subprocess starts much faster (~2-5s vs ~21s).
+            # This lets the video play only ONCE (no looping needed).
+            self._pre_warm_ocr()
+            
             # Wait for RTSP stream to be available (with retry loop for sync)
             # The sync mechanism requires workers to keep retrying so that:
             # 1. Workers signal ready
@@ -417,8 +419,6 @@ class StationWorker:
                         "retry": sync_retry,
                         "max_retries": max_sync_retries
                     })
-                    # Re-signal ready in case file was cleared
-                    self._signal_pipeline_ready()
                     time.sleep(2)  # Brief pause before retry
                 else:
                     self._log_structured("error", "rtsp_unavailable_at_startup", {
@@ -426,8 +426,6 @@ class StationWorker:
                         "retries_exhausted": sync_retry
                     })
                     self._pipeline_metrics.rtsp_unavailable_events += 1
-                    # Preserve ready signal so RTSP streamer can eventually start
-                    self._preserve_ready_signal = True
                     return
             
             # Start persistent GStreamer pipeline
@@ -532,6 +530,120 @@ class StationWorker:
                 self._restart_count = 0
                 self._circuit_breaker.reset()
     
+    def _pre_warm_ocr(self):
+        """
+        Pre-warm OCR models before GStreamer connects to RTSP.
+        
+        With on-demand RTSP streaming, the video only starts when GStreamer
+        connects. By loading EasyOCR models HERE (in the station worker),
+        we bring model files into the OS page cache and warm up PyTorch.
+        
+        When frame_pipeline later spawns its own OCR subprocess, model
+        loading is significantly faster (~2-5s vs ~21s from cold).
+        
+        We also set OCR_PRE_WARMED=1 env var so frame_pipeline skips
+        its own blocking warmup phase.
+        """
+        self._log_structured("info", "ocr_pre_warm_starting")
+        
+        try:
+            import multiprocessing as _mp
+            
+            # Ensure PYTHONPATH includes /app for ocr_worker import
+            _src_dir = '/app'
+            _cur_pp = os.environ.get('PYTHONPATH', '')
+            if _src_dir not in _cur_pp.split(':'):
+                os.environ['PYTHONPATH'] = f"{_src_dir}:{_cur_pp}" if _cur_pp else _src_dir
+            
+            # Use 'spawn' context (same as frame_pipeline) to avoid GStreamer conflicts
+            ctx = _mp.get_context('spawn')
+            input_q = ctx.Queue(maxsize=10)
+            output_q = ctx.Queue(maxsize=20)
+            
+            sys.path.insert(0, _src_dir)
+            from ocr_worker import run_worker
+            
+            proc = ctx.Process(
+                target=run_worker,
+                args=(input_q, output_q, '/models/easyocr'),
+                daemon=True,
+                name=f"ocr-warmup-{self.station_id}",
+            )
+            proc.start()
+            self._log_structured("info", "ocr_pre_warm_subprocess_started", {
+                "pid": proc.pid
+            })
+            
+            import numpy as np
+            
+            # Wait for 'ready' signal (model loading ~5s)
+            warmup_start = time.time()
+            warmup_timeout = 60
+            ready = False
+            
+            while time.time() - warmup_start < warmup_timeout:
+                try:
+                    item = output_q.get(timeout=5)
+                    if isinstance(item, tuple) and item[0] == 'ready':
+                        ready = True
+                        elapsed = time.time() - warmup_start
+                        self._log_structured("info", "ocr_pre_warm_models_loaded", {
+                            "elapsed_sec": round(elapsed, 1)
+                        })
+                        break
+                    elif isinstance(item, tuple) and item[0] == 'error':
+                        self._log_structured("error", "ocr_pre_warm_failed", {
+                            "error": item[1]
+                        })
+                        break
+                except Exception:
+                    pass
+            
+            if ready:
+                # Send 2 dummy warmup frames to trigger PyTorch JIT warm-up
+                dummy_frame = np.zeros((360, 640, 3), dtype=np.uint8)
+                for i in range(2):
+                    try:
+                        input_q.put((-(i + 1), 360, 640, dummy_frame.tobytes()), timeout=10)
+                    except Exception:
+                        break
+                
+                # Wait for warmup responses
+                warmup_responses = 0
+                while warmup_responses < 2 and (time.time() - warmup_start) < warmup_timeout:
+                    try:
+                        item = output_q.get(timeout=10)
+                        if isinstance(item, tuple) and len(item) == 2 and item[0] != 'ready':
+                            warmup_responses += 1
+                    except Exception:
+                        break
+                
+                elapsed = time.time() - warmup_start
+                self._log_structured("info", "ocr_pre_warm_complete", {
+                    "elapsed_sec": round(elapsed, 1),
+                    "warmup_responses": warmup_responses
+                })
+            
+            # Terminate the warmup subprocess — its job is done.
+            # Model files are now hot in OS page cache.
+            try:
+                input_q.put(None, timeout=2)  # graceful shutdown signal
+                proc.join(timeout=5)
+            except Exception:
+                pass
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=3)
+            
+            # Signal frame_pipeline to skip its own warmup
+            os.environ['OCR_PRE_WARMED'] = '1'
+            
+        except Exception as e:
+            self._log_structured("warning", "ocr_pre_warm_failed_continuing", {
+                "error": str(e)
+            })
+            # Non-fatal: frame_pipeline will do its own warmup as fallback
+
     def _initialize_pipeline(self):
         """
         Initialize pipeline components.
@@ -674,25 +786,6 @@ class StationWorker:
                                 "port": port
                             })
                             port_ready = True
-                            
-                            # Signal ready as soon as RTSP port is open
-                            # This tells the RTSP streamer we're ready to receive frames
-                            # (before waiting for the specific stream path to exist)
-                            self._signal_pipeline_ready()
-                            
-                            # SINGLE-PHASE SYNC: When SYNC_MODE=signal, return immediately
-                            # after signaling ready. GStreamer will get 404 errors initially
-                            # but that's OK - the OCR warmup happens in frame_pipeline.py
-                            # module init, which signals ocr_ready. RTSP streamer waits for
-                            # all ocr_ready signals then starts streams. GStreamer retries
-                            # RTSP internally and eventually connects successfully.
-                            sync_mode = os.environ.get('SYNC_MODE', 'signal')
-                            if sync_mode == 'signal':
-                                self._log_structured("info", "single_phase_sync_enabled", {
-                                    "mode": "signal",
-                                    "note": "GStreamer will retry RTSP after OCR warmup completes"
-                                })
-                                return True  # Let GStreamer start and do OCR warmup
                 except Exception:
                     pass
                 
@@ -951,74 +1044,6 @@ class StationWorker:
             )
         
         return pipeline
-    
-    def _signal_pipeline_ready(self):
-        """
-        Signal to RTSP streamer that this station's pipeline is ready.
-        
-        Creates a ready marker file in /sync/ready/{station_id} to indicate
-        this station's GStreamer pipeline has connected and is ready to receive
-        frames. The RTSP streamer waits for all stations to signal ready before
-        starting video playback, ensuring no frames are missed.
-        
-        This solves the race condition where:
-        1. RTSP streamer starts video playback
-        2. GStreamer pipelines take time to connect
-        3. By the time pipelines connect, initial frames (order 384) are missed
-        """
-        sync_dir = os.environ.get('PIPELINE_SYNC_DIR', '/sync/ready')
-        try:
-            os.makedirs(sync_dir, exist_ok=True)
-            ready_file = os.path.join(sync_dir, self.station_id)
-            
-            # Write timestamp to ready file with explicit flush/sync
-            with open(ready_file, 'w') as f:
-                f.write(f"{time.time()}\n{self._pipeline_pid}\n")
-                f.flush()
-                os.fsync(f.fileno())  # Force write to disk
-            
-            # Also sync the directory to ensure file entry is visible
-            dir_fd = os.open(sync_dir, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-            
-            # Verify file was actually created
-            import subprocess
-            file_exists = os.path.exists(ready_file)
-            dir_contents = os.listdir(sync_dir)
-            
-            self._log_structured("info", "pipeline_ready_signaled", {
-                "ready_file": ready_file,
-                "pid": self._pipeline_pid,
-                "file_exists": file_exists,
-                "dir_contents": dir_contents
-            })
-        except Exception as e:
-            # Non-fatal - sync is optional (for cases without shared volume)
-            self._log_structured("warning", "pipeline_ready_signal_failed", {
-                "error": str(e)
-            })
-    
-    def _clear_ready_signal(self):
-        """Clear the ready signal on shutdown (unless preserving for RTSP sync)."""
-        # Skip clearing if we want RTSP streamer to see the signal
-        # This prevents the deadlock where workers and RTSP wait for each other
-        if self._preserve_ready_signal:
-            self._log_structured("debug", "pipeline_ready_signal_preserved", {
-                "reason": "rtsp_unavailable_at_startup"
-            })
-            return
-            
-        sync_dir = os.environ.get('PIPELINE_SYNC_DIR', '/sync/ready')
-        ready_file = os.path.join(sync_dir, self.station_id)
-        try:
-            if os.path.exists(ready_file):
-                os.remove(ready_file)
-                self._log_structured("debug", "pipeline_ready_signal_cleared")
-        except Exception:
-            pass
 
     def _safe_pipeline_restart(self, reason: str):
         """
@@ -1219,14 +1244,30 @@ class StationWorker:
                         except Exception:
                             pass
                         
-                        self._pipeline_metrics.pipeline_failures += 1
+                        # Check if pipeline ran long enough to be considered "successful".
+                        # Exit codes 0 (EOS) and 134 (SIGABRT from OpenCV TLS teardown)
+                        # are expected when the video stream ends or loops — these are
+                        # clean teardown crashes, not real failures.
+                        run_duration = time.time() - self._pipeline_metrics.pipeline_start_time
+                        expected_exit = returncode in (0, 134) and run_duration > 10.0
                         
-                        self._log_structured("error", "pipeline_subprocess_died", {
-                            "exit_code": returncode,
-                            "output_snippet": output[:500] if output else None
-                        })
+                        if expected_exit:
+                            self._log_structured("info", "pipeline_video_cycle_ended", {
+                                "exit_code": returncode,
+                                "run_duration_sec": round(run_duration, 1)
+                            })
+                            # Reset restart count — this was a successful run, not a failure
+                            self._restart_count = 0
+                            self._circuit_breaker.reset()
+                        else:
+                            self._pipeline_metrics.pipeline_failures += 1
+                            self._log_structured("error", "pipeline_subprocess_died", {
+                                "exit_code": returncode,
+                                "run_duration_sec": round(run_duration, 1),
+                                "output_snippet": output[:500] if output else None
+                            })
                         
-                        # Trigger safe restart
+                        # Trigger restart (with reset backoff for expected exits)
                         self._safe_pipeline_restart(f"subprocess_exit_code_{returncode}")
                         continue
                 
@@ -1828,9 +1869,6 @@ class StationWorker:
         Prevents zombie processes and ensures clean exit.
         """
         self._log_structured("info", "cleanup_starting")
-        
-        # Clear ready signal so RTSP streamer knows we're shutting down
-        self._clear_ready_signal()
         
         # Calculate total uptime
         if self._pipeline_metrics.pipeline_start_time > 0:

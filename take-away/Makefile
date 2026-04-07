@@ -338,7 +338,7 @@ build: check-env
 	@echo "$(BLUE)Building Take-Away Docker images...$(NC)"
 	@if [ "$(REGISTRY)" = "false" ] || [ "$(REGISTRY)" = "FALSE" ]; then \
 		echo "$(YELLOW)REGISTRY=false → Building images locally...$(NC)"; \
-		docker compose -f $(COMPOSE_FILE) build; \
+		docker compose -f $(COMPOSE_FILE) --profile parallel build; \
 	else \
 		echo "$(YELLOW)REGISTRY=true → Pulling images from registry...$(NC)"; \
 		docker compose -f $(COMPOSE_FILE) pull order-accuracy frame-selector gradio-ui rtsp-streamer; \

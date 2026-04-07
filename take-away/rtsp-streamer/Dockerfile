@@ -36,11 +36,14 @@ WORKDIR /opt/rtsp-streamer
 
 # ---- Copy MediaMTX from stage 1 ----
 COPY --from=mediamtx /mediamtx ./mediamtx
-COPY --from=mediamtx /mediamtx.yml ./mediamtx.yml
+
+# ---- Copy custom on-demand MediaMTX config ----
+COPY mediamtx.yml ./mediamtx.yml
 
 # ---- Startup script ----
 COPY start.sh ./start.sh
-RUN chmod +x ./start.sh ./mediamtx
+COPY on-demand.sh ./on-demand.sh
+RUN chmod +x ./start.sh ./mediamtx ./on-demand.sh
 
 # ---- Runtime config ----
 ENV MEDIA_DIR=/media \
