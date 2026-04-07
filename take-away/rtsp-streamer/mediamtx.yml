@@ -1,0 +1,34 @@
+# MediaMTX Configuration - On-Demand Streaming
+# ==============================================
+# Streams are created on-demand when a client (GStreamer pipeline) connects.
+# This eliminates the 2PC sync mechanism entirely:
+#   - No race condition: ffmpeg only starts AFTER GStreamer connects
+#   - Frame 0 guaranteed: client triggers stream creation
+#   - Multi-station safe: each connection gets frames from the start
+#
+# How it works:
+#   1. GStreamer connects to rtsp://rtsp-streamer:8554/<path>
+#   2. MediaMTX detects the connection
+#   3. MediaMTX spawns ffmpeg via runOnDemand
+#   4. ffmpeg streams from frame 0 into the path
+#   5. GStreamer receives frame 0 immediately
+
+logLevel: info
+logDestinations: [stdout]
+
+rtsp: yes
+rtspAddress: :8554
+
+pathDefaults:
+  # On-demand: only start ffmpeg when a client connects.
+  # on-demand.sh resolves /media/$MTX_PATH.mp4, falls back to first .mp4 in /media.
+  # This allows station_1, station_2, etc. to all work even when only test.mp4 exists.
+  runOnDemand: /opt/rtsp-streamer/on-demand.sh
+  runOnDemandRestart: no
+  runOnDemandStartTimeout: 10s
+  runOnDemandCloseAfter: 30s
+
+# Catch-all: any path not explicitly defined uses pathDefaults above.
+# Without this, connections to station_1 etc. get "path not configured".
+paths:
+  all_others:
