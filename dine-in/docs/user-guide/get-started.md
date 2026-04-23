@@ -103,10 +103,23 @@ Open http://localhost:7861 for the Gradio UI, or http://localhost:8083/docs for 
 
 ### Via REST API
 
+The bundled `MCD-1001.png` image shows **Filet-O-Fish** and **Cheesy Fries** on the tray.
+Two test scenarios are provided:
+
+**Negative test case** — order does not match tray (demonstrates mismatch detection):
 ```bash
 curl -X POST "http://localhost:8083/api/validate" \
   -F "image=@images/MCD-1001.png" \
   -F 'order={"items":[{"name":"Cheeseburger","quantity":1},{"name":"French Fries","quantity":1}]}'
+# Expected: order_complete=false, accuracy_score=0.0
+```
+
+**Positive test case** — order matches tray (demonstrates successful validation):
+```bash
+curl -X POST "http://localhost:8083/api/validate" \
+  -F "image=@images/MCD-1001.png" \
+  -F 'order={"items":[{"name":"Filet-O-Fish","quantity":1},{"name":"Cheesy Fries","quantity":1}]}'
+# Expected: order_complete=true, accuracy_score=1.0
 ```
 
 ### Via Make
