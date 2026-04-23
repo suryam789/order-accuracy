@@ -49,11 +49,11 @@ make update-submodules
 
 ### 2. Setup OVMS Model (First Time Only)
 
-The VLM model must be exported before running. The script reads `take-away/.env`, so complete step 1 first.
+The VLM model must be exported before running. The script reads `dine-in/.env`, so complete step 1 first.
 
 ```bash
 cd ../ovms-service
-./setup_models.sh    # Downloads and exports model (~30-60 min first time)
+./setup_models.sh --app dine-in    # Downloads and exports model (~30-60 min first time)
 cd ../dine-in
 ```
 

@@ -4,7 +4,7 @@ Guide to using the Dine-In Order Accuracy application features.
 
 > **Note — `TARGET_DEVICE`**: To change the inference device, set `TARGET_DEVICE` in `.env` to `GPU`, `CPU`, or `NPU`, then re-run setup:
 > ```bash
-> cd ../ovms-service && ./setup_models.sh && cd ../dine-in
+> cd ../ovms-service && ./setup_models.sh --app dine-in && cd ../dine-in
 > make down && make up
 > ```
 

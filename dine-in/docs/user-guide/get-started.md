@@ -33,13 +33,15 @@ make update-submodules
 
 ## Step 2: Setup OVMS Model (First Time Only)
 
-The script reads `take-away/.env`, so complete Step 1 first.
+The setup script reads model configuration (device, precision, model name) from `dine-in/.env` (created in Step 1), so **complete Step 1 before running this step**.
 
 ```bash
 cd ../ovms-service
-./setup_models.sh    # Downloads and exports model (~30-60 min first time)
+./setup_models.sh --app dine-in    # Downloads and exports model (~30-60 min first time)
 cd ../dine-in
 ```
+
+> **Note**: If you previously ran setup for take-away, the model files are already shared and this step will detect them automatically — no re-download needed.
 
 This downloads Qwen2.5-VL-7B-Instruct (~7 GB) and converts it to OpenVINO INT8 format. Only needed once — model files are shared with take-away.
 
