@@ -92,6 +92,39 @@ check_model() {
 }
 
 ###############################################
+# Migrate a model from a legacy path to the expected target path.
+# Pre-v2026.0.0 releases exported to Qwen2.5-VL-7B-Instruct-ov-int8;
+# current releases use Qwen/Qwen2.5-VL-7B-Instruct.
+# If the new path doesn't exist but an old one does, copy it so that
+# users don't need to re-export the full 7B model from scratch.
+###############################################
+migrate_legacy_model() {
+    local target_path="$1"
+
+    if [ -d "${target_path}" ]; then
+        return 0  # Already at the new location, nothing to do
+    fi
+
+    local legacy_paths=(
+        "${MODELS_DIR}/Qwen/Qwen2.5-VL-7B-Instruct-ov-int8"
+        "${MODELS_DIR}/Qwen2.5-VL-7B-Instruct-ov-int8"
+    )
+
+    for legacy_path in "${legacy_paths[@]}"; do
+        if check_model "${legacy_path}"; then
+            echo "  Legacy model found at ${legacy_path}"
+            echo "  Migrating to new path: ${target_path} ..."
+            mkdir -p "$(dirname "${target_path}")"
+            cp -r "${legacy_path}" "${target_path}"
+            echo "  ✓ Migration complete (original preserved at ${legacy_path})"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+###############################################
 # Replace the host MODELS_DIR path with the container path /models in graph.pbtxt.
 # export_model.py always writes the absolute host path, but OVMS runs inside a
 # container where the models directory is mounted at /models.
@@ -246,6 +279,15 @@ for MODEL_NAME in "${!MODEL_SOURCES[@]}"; do
     ###########################################
     if check_model "${TARGET_PATH}"; then
         echo "✓ Model already exists locally"
+        update_graph_pbtxt_device "${MODEL_NAME}"
+        continue
+    fi
+
+    ###########################################
+    # Migrate from legacy model path (pre-v2026.0.0)
+    ###########################################
+    if migrate_legacy_model "${TARGET_PATH}"; then
+        echo "✓ Migrated from legacy path"
         update_graph_pbtxt_device "${MODEL_NAME}"
         continue
     fi

@@ -285,8 +285,8 @@ class DineInWorker:
             result.items_expected = len(order_data.get("items", []))
             result.missing_items = len(validation_result.missing_items)
             result.extra_items = len(validation_result.extra_items)
-            result.missing_items_list = validation_result.missing_items
-            result.extra_items_list = validation_result.extra_items
+            result.missing_items_list = list(validation_result.missing_items)
+            result.extra_items_list = list(validation_result.extra_items)
             
             # Extract VLM metrics if available
             if validation_result.metrics:

@@ -80,13 +80,13 @@ class ConfigManager:
         logger.info("Loading application configuration")
         
         service_config = ServiceConfig(
-            ovms_endpoint=os.getenv("OVMS_ENDPOINT", "http://ovms-vlm:8000"),
-            ovms_model_name=os.getenv("OVMS_MODEL_NAME", "Qwen/Qwen2.5-VL-7B-Instruct"),
-            vlm_precision=os.getenv("VLM_PRECISION", "int8"),
-            vlm_device=os.getenv("VLM_DEVICE", "GPU"),
-            semantic_service_endpoint=os.getenv("SEMANTIC_SERVICE_ENDPOINT", "http://semantic-service:8080"),
-            metrics_collector_endpoint=os.getenv("METRICS_COLLECTOR_ENDPOINT", "http://metrics-collector:8084"),
-            api_timeout=int(os.getenv("API_TIMEOUT", "300"))  # Extended for 7B model with inventory
+            ovms_endpoint=os.getenv("OVMS_ENDPOINT") or "http://ovms-vlm:8000",
+            ovms_model_name=os.getenv("OVMS_MODEL_NAME") or "Qwen/Qwen2.5-VL-7B-Instruct",
+            vlm_precision=os.getenv("VLM_PRECISION") or "int8",
+            vlm_device=os.getenv("VLM_DEVICE") or "GPU",
+            semantic_service_endpoint=os.getenv("SEMANTIC_SERVICE_ENDPOINT") or "http://semantic-service:8080",
+            metrics_collector_endpoint=os.getenv("METRICS_COLLECTOR_ENDPOINT") or "http://metrics-collector:8084",
+            api_timeout=int(os.getenv("API_TIMEOUT") or "300")  # Extended for 7B model with inventory
         )
         
         benchmark_config = BenchmarkConfig(

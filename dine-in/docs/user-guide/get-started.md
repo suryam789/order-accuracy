@@ -33,13 +33,15 @@ make update-submodules
 
 ## Step 2: Setup OVMS Model (First Time Only)
 
-The script reads `take-away/.env`, so complete Step 1 first.
+The setup script reads model configuration (device, precision, model name) from `dine-in/.env` (created in Step 1), so **complete Step 1 before running this step**.
 
 ```bash
 cd ../ovms-service
-./setup_models.sh    # Downloads and exports model (~30-60 min first time)
+./setup_models.sh --app dine-in    # Downloads and exports model (~30-60 min first time)
 cd ../dine-in
 ```
+
+> **Note**: If you previously ran setup for take-away, the model files are already shared and this step will detect them automatically — no re-download needed.
 
 This downloads Qwen2.5-VL-7B-Instruct (~7 GB) and converts it to OpenVINO INT8 format. Only needed once — model files are shared with take-away.
 
@@ -101,10 +103,23 @@ Open http://localhost:7861 for the Gradio UI, or http://localhost:8083/docs for 
 
 ### Via REST API
 
+The bundled `MCD-1001.png` image shows **Filet-O-Fish** and **Cheesy Fries** on the tray.
+Two test scenarios are provided:
+
+**Negative test case** — order does not match tray (demonstrates mismatch detection):
 ```bash
 curl -X POST "http://localhost:8083/api/validate" \
   -F "image=@images/MCD-1001.png" \
   -F 'order={"items":[{"name":"Cheeseburger","quantity":1},{"name":"French Fries","quantity":1}]}'
+# Expected: order_complete=false, accuracy_score=0.0
+```
+
+**Positive test case** — order matches tray (demonstrates successful validation):
+```bash
+curl -X POST "http://localhost:8083/api/validate" \
+  -F "image=@images/MCD-1001.png" \
+  -F 'order={"items":[{"name":"Filet-O-Fish","quantity":1},{"name":"Cheesy Fries","quantity":1}]}'
+# Expected: order_complete=true, accuracy_score=1.0
 ```
 
 ### Via Make

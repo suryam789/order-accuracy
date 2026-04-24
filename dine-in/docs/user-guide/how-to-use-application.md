@@ -4,7 +4,7 @@ Guide to using the Dine-In Order Accuracy application features.
 
 > **Note — `TARGET_DEVICE`**: To change the inference device, set `TARGET_DEVICE` in `.env` to `GPU`, `CPU`, or `NPU`, then re-run setup:
 > ```bash
-> cd ../ovms-service && ./setup_models.sh && cd ../dine-in
+> cd ../ovms-service && ./setup_models.sh --app dine-in && cd ../dine-in
 > make down && make up
 > ```
 
@@ -13,6 +13,12 @@ Guide to using the Dine-In Order Accuracy application features.
 Access the web interface at http://localhost:7861
 
 ### Interface Overview
+
+> **Note — negative test case**: The default MCD-1001 scenario in the Gradio UI
+> intentionally submits a mismatched order (Cheeseburger / French Fries) against a tray
+> image that contains Filet-O-Fish and Cheesy Fries. This demonstrates the application's
+> ability to detect an incorrect order. The result will show `order_complete: ✗`. To see a
+> successful validation, select another scenario or update the order to match the tray.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -55,6 +61,15 @@ Access the web interface at http://localhost:7861
 
 ### Validate Single Image
 
+The application supports two complementary test scenarios with the bundled `MCD-1001.png`
+sample image (which depicts **Filet-O-Fish** and **Cheesy Fries** on the tray):
+
+#### Negative test case — order does not match tray contents
+
+This example intentionally submits an order that does **not** match the items visible in
+`MCD-1001.png`. It demonstrates how the application detects a mismatch and reports missing
+and extra items. This is a valid production scenario: a customer receives the wrong items.
+
 ```bash
 curl -X POST "http://localhost:8083/api/validate" \
   -F "image=@images/MCD-1001.png" \
@@ -69,11 +84,60 @@ curl -X POST "http://localhost:8083/api/validate" \
   }'
 ```
 
-### Response Format
+Expected response (`order_complete: false` — tray has Filet-O-Fish/Cheesy Fries, not Cheeseburger/French Fries):
 
 ```json
 {
-  "validation_id": "26eba3f8-276b-44ac-b553-74419f84c1ad",
+  "validation_id": "939d830a-8335-4fea-a564-0b83b93b71ab",
+  "image_id": "MCD-1001",
+  "order_complete": false,
+  "accuracy_score": 0.0,
+  "missing_items": [
+    {"name": "Cheeseburger", "quantity": 1},
+    {"name": "French Fries", "quantity": 1}
+  ],
+  "extra_items": [
+    {"name": "Filet-O-Fish", "quantity": 1},
+    {"name": "Cheesy Fries", "quantity": 1}
+  ],
+  "quantity_mismatches": [],
+  "matched_items": [],
+  "timestamp": "2026-03-20T14:53:05.543315",
+  "metrics": {
+    "end_to_end_latency_ms": 21854,
+    "vlm_inference_ms": 21747,
+    "agent_reconciliation_ms": 32,
+    "cpu_utilization": 23.21,
+    "gpu_utilization": 0.0,
+    "memory_utilization": 78.07
+  }
+}
+```
+
+#### Positive test case — order matches tray contents
+
+This example submits the correct items for `MCD-1001.png` and demonstrates a successful
+order validation (`order_complete: true`).
+
+```bash
+curl -X POST "http://localhost:8083/api/validate" \
+  -F "image=@images/MCD-1001.png" \
+  -F 'order={
+    "order_id": "MCD-1001",
+    "table_number": "T12",
+    "restaurant": "McDonald'\''s",
+    "items": [
+      {"name": "Filet-O-Fish", "quantity": 1},
+      {"name": "Cheesy Fries", "quantity": 1}
+    ]
+  }'
+```
+
+Expected response (`order_complete: true` — tray contents match the submitted order):
+
+```json
+{
+  "validation_id": "c459c9e5-3b48-462a-8c09-6360d4fd76fa",
   "image_id": "MCD-1001",
   "order_complete": true,
   "accuracy_score": 1.0,
@@ -82,26 +146,26 @@ curl -X POST "http://localhost:8083/api/validate" \
   "quantity_mismatches": [],
   "matched_items": [
     {
-      "expected_name": "Cheeseburger",
-      "detected_name": "Cheeseburger",
+      "expected_name": "Filet-O-Fish",
+      "detected_name": "Filet-O-Fish",
       "similarity": 1.0,
       "quantity": 1
     },
     {
-      "expected_name": "French Fries",
-      "detected_name": "Fries",
-      "similarity": 0.92,
+      "expected_name": "Cheesy Fries",
+      "detected_name": "Cheesy Fries",
+      "similarity": 1.0,
       "quantity": 1
     }
   ],
-  "timestamp": "2026-03-02T16:36:50.278369",
+  "timestamp": "2026-03-20T14:55:31.025273",
   "metrics": {
-    "end_to_end_latency_ms": 9003,
-    "vlm_inference_ms": 8850,
-    "agent_reconciliation_ms": 35,
-    "cpu_utilization": 27.07,
-    "gpu_utilization": 100.0,
-    "memory_utilization": 79.99
+    "end_to_end_latency_ms": 14475,
+    "vlm_inference_ms": 14438,
+    "agent_reconciliation_ms": 6,
+    "cpu_utilization": 16.02,
+    "gpu_utilization": 0.0,
+    "memory_utilization": 78.27
   }
 }
 ```

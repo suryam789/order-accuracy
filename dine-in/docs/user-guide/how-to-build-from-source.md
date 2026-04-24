@@ -79,7 +79,7 @@ Before starting services, download and export the VLM model:
 
 ```bash
 cd ../ovms-service
-./setup_models.sh
+./setup_models.sh --app dine-in
 cd ../dine-in
 ```
 
